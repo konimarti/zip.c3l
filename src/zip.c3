@@ -1,126 +1,187 @@
-module zip;
+module archive::zip;
 
 import std::io;
+import std::collections::pair;
 
-const uint COMPRESS_METHOD_STORE = 0;
+const uint COMPRESS_METHOD_STORE   = 0;
 const uint COMPRESS_METHOD_DEFLATE = 8;
+const uint COMPRESS_METHOD_BZIP2   = 12; // TODO: unsupported
 
-const char[*] MAGIC_NUMBER_EOCD = {0x50, 0x4b, 0x05, 0x06};
-const char[*] MAGIC_NUMBER_CDFH = {0x50, 0x4b, 0x01, 0x02};
-const char[*] MAGIC_NUMBER_LFH  = {0x50, 0x4b, 0x03, 0x04};
+const char[*] MAGIC_NUMBER_END     = {0x50, 0x4b, 0x05, 0x06};
+const char[*] MAGIC_NUMBER_CENTRAL = {0x50, 0x4b, 0x01, 0x02};
+const char[*] MAGIC_NUMBER_LOCAL   = {0x50, 0x4b, 0x03, 0x04};
 
-faultdef NOT_FOUND;
+faultdef NOT_FOUND, INVALID_END_RECORD, INVALID_CENTRAL_FILE_HEADER,
+	INVALID_LOCAL_FILE_HEADER, MAGIC_NUMBER_MISMATCH;
+
+alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
 
 <*
+ End of central directory record (EOCD)
 *>
-fn ushort? read_le_16(InStream in) @inline @private
+struct Zip (Printable)
 {
-	return ((ushort) in.read_byte()!) | ((ushort) in.read_byte()! << 8);
+	ZipEndRecord 	       record;
+	ZipCentralFileHeader[] central_headers;
+	ZipLocalFileHeader[]   local_headers;
+	Allocator	       allocator;
 }
 
-<*
-*>
-fn uint? read_le_32(InStream in) @inline @private
+fn void? Zip.parse(&z, InStream file, Allocator allocator)
 {
-	return ((uint) in.read_byte()!) |
-		((uint) in.read_byte()! << 8) |
-		((uint) in.read_byte()! << 16) |
-		((uint) in.read_byte()! << 24);
+	usz nrecords, end_record_loc;
+
+	end_record_loc = find_end_record(file)!;
+
+	file.seek(end_record_loc, Seek.SET)!;
+	z.record.parse(file, allocator)!;
+	// TODO: Fix memory handling when error occurs
+	// defer catch z.record.free();
+	nrecords = z.record.tot_nr_records;
+
+	z.central_headers = allocator::new_array(allocator, ZipCentralFileHeader, nrecords);
+	// TODO: Fix memory handling when error occurs
+	// defer catch allocator::free(allocator, z.central_headers);
+
+	z.local_headers = allocator::new_array(allocator, ZipLocalFileHeader, nrecords);
+	// TODO: Fix memory handling when error occurs
+	// defer catch allocator::free(allocator, z.local_headers);
+
+	// Read central file headers
+	file.seek(z.record.rel_offset, Seek.SET)!;
+	foreach (&central_header : z.central_headers)
+	{
+		central_header.parse(file, allocator)!;
+	}
+
+	// Read local file headers
+	foreach (i, &local_header : z.local_headers)
+	{
+		file.seek(z.central_headers[i].rel_offset, Seek.SET)!;
+		local_header.parse(file, allocator)!;
+	}
+
+	z.allocator = allocator;
+}
+
+fn void Zip.free(&z)
+{
+	if (!z.allocator) return;
+
+	z.record.free();
+
+	foreach (&c : z.central_headers) c.free();
+	allocator::free(z.allocator, z.central_headers);
+
+	foreach (&l : z.local_headers) l.free();
+	allocator::free(z.allocator, z.local_headers);
+
+	*z = {};
+}
+
+fn usz? Zip.to_format(&z, Formatter *f) @dynamic
+{
+	// TODO: Not implemented yet.
+	return 0;
+}
+
+fn usz Zip.len(&z) @operator(len)
+{
+	return z.record.tot_nr_records;
+}
+
+fn ZipFile Zip.get(&z, usz index) @operator([])
+{
+	return {z.central_headers[index], z.local_headers[index]};
 }
 
 <*
  End of central directory record (EOCD)
 *>
-struct ZipEOCD (Printable)
+struct ZipEndRecord (Printable)
 {
-	uint magic_number;
-	ushort number_of_disk;
-	ushort disk_start;
-	ushort nr_records;
-	ushort tot_nr_records;
-	uint size_bytes; // size of central directory
-	uint rel_offset; // relative to start of archive
-	ushort comment_len;
-	String comment; // comment.len == comment_len
+	uint	  magic_number;
+	ushort 	  number_of_disk;
+	ushort    disk_start;
+	ushort    nr_records;
+	ushort    tot_nr_records;
+	uint      size_bytes; 		// size of central directory
+	uint      rel_offset; 		// relative to start of archive
+	ushort    comment_len;
+	String    comment; 		// comment.len == comment_len
 	Allocator allocator;
 }
 
-fn void ZipEOCD.free(&self)
+fn void ZipEndRecord.free(&self)
 {
 	if (!self.allocator) return;
 	allocator::free(self.allocator, self.comment);
 	*self = {};
 }
 
-fn usz? ZipEOCD.to_format(&self, Formatter *f) @dynamic
+fn usz? ZipEndRecord.to_format(&self, Formatter *f) @dynamic
 {
 	usz n;
-
 	n += f.printf("magic num : %x\n", self.magic_number)!;
 	n += f.printf("records   : %d\n", self.nr_records)!;
 	n += f.printf("total     : %d\n", self.tot_nr_records)!;
 	n += f.printf("size      : %d\n", self.size_bytes)!;
 	n += f.printf("rel_offset: %d\n", self.rel_offset)!;
 	n += f.printf("comment   : %s\n", self.comment)!;
-
 	return n;
 }
 
 <*
 *>
-fn ZipEOCD? parse_eocd(InStream in, Allocator allocator = mem) => @pool()
+fn void? ZipEndRecord.parse(&r, InStream in, Allocator allocator = mem) => @pool()
 {
-	ZipEOCD eocd;
+	char[22] buf;
 
-	eocd.magic_number   = read_le_32(in)!;
-	eocd.number_of_disk = read_le_16(in)!;
-	eocd.disk_start     = read_le_16(in)!;
-	eocd.nr_records     = read_le_16(in)!;
-	eocd.tot_nr_records = read_le_16(in)!;
-	eocd.size_bytes     = read_le_32(in)!;
-	eocd.rel_offset     = read_le_32(in)!;
-	eocd.comment_len    = read_le_16(in)!;
+	if (in.read(buf[..])! != 22) return INVALID_END_RECORD?;
 
-	if (eocd.comment_len > 0)
-	{
-		char[] comment = mem::talloc_array(char, eocd.comment_len);
-		in.read(comment)!;
-		eocd.comment = ((String)comment).copy(allocator);
-		eocd.allocator = allocator;
-	}
+	if (buf[:4] != MAGIC_NUMBER_END[:4]) return MAGIC_NUMBER_MISMATCH?;
 
-	return eocd;
+	r.magic_number   = read_le_32(buf[ 0:4])!;
+	r.number_of_disk = read_le_16(buf[ 4:2])!;
+	r.disk_start     = read_le_16(buf[ 6:2])!;
+	r.nr_records     = read_le_16(buf[ 8:2])!;
+	r.tot_nr_records = read_le_16(buf[10:2])!;
+	r.size_bytes     = read_le_32(buf[12:4])!;
+	r.rel_offset     = read_le_32(buf[16:4])!;
+	r.comment_len    = read_le_16(buf[20:2])!;
+	r.comment        = read_n(in, r.comment_len, allocator)!;
+	r.allocator      = allocator;
 }
 
 <*
  Central directory file header (CDFH)
 *>
-struct ZipCDFH
+struct ZipCentralFileHeader
 {
-	uint magic_number;
-	ushort version_used;
-	ushort version_min;
-	ushort flag;
-	ushort compress_method;
-	ushort last_mod_time;
-	ushort last_mod_date;
-	uint crc32; // of uncompressed data
-	uint compress_size;
-	uint uncompress_size;
-	ushort filename_len; // n
-	ushort extra_len; // m
-	ushort comment_len; // k
-	ushort disk_nr; // where file starts
-	ushort internal_attr;
-	uint external_attr;
-	uint rel_offset; // relative offset of local file header
-	String filename; // filename.len == n
-	String extra; // extra.len == m
-	String comment; // comment.len == k
+	uint      magic_number;
+	ushort    version_used;
+	ushort    version_min;
+	ushort    flag;
+	ushort    compress_method;
+	ushort    last_mod_time;
+	ushort    last_mod_date;
+	uint      crc32;		// of uncompressed data
+	uint      compress_size;
+	uint      uncompress_size;
+	ushort    filename_len; 	// n
+	ushort    extra_len; 		// m
+	ushort    comment_len; 		// k
+	ushort    disk_nr; 		// where file starts
+	ushort    internal_attr;
+	uint      external_attr;
+	uint      rel_offset; 		// relative offset of local file header
+	String    filename; 		// filename.len == n
+	String    extra; 		// extra.len == m
+	String    comment; 		// comment.len == k
 	Allocator allocator;
 }
 
-fn void ZipCDFH.free(&self)
+fn void ZipCentralFileHeader.free(&self)
 {
 	if (!self.allocator) return;
 	allocator::free(self.allocator, self.filename);
@@ -129,76 +190,59 @@ fn void ZipCDFH.free(&self)
 	*self = {};
 }
 
-fn ZipCDFH? parse_cdfh(InStream in, Allocator allocator = mem) => @pool()
+fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) => @pool()
 {
-	ZipCDFH cdfh;
+	char[46] buf;
 
-	cdfh.magic_number    = read_le_32(in)!;
-	cdfh.version_used    = read_le_16(in)!;
-	cdfh.version_min     = read_le_16(in)!;
-	cdfh.flag            = read_le_16(in)!;
-	cdfh.compress_method = read_le_16(in)!;
-	cdfh.last_mod_time   = read_le_16(in)!;
-	cdfh.last_mod_date   = read_le_16(in)!;
-	cdfh.crc32           = read_le_32(in)!;
-	cdfh.compress_size   = read_le_32(in)!;
-	cdfh.uncompress_size = read_le_32(in)!;
-	cdfh.filename_len    = read_le_16(in)!;
-	cdfh.extra_len       = read_le_16(in)!;
-	cdfh.comment_len     = read_le_16(in)!;
-	cdfh.disk_nr         = read_le_16(in)!;
-	cdfh.internal_attr   = read_le_16(in)!;
-	cdfh.external_attr   = read_le_32(in)!;
-	cdfh.rel_offset      = read_le_32(in)!;
+	if (in.read(buf[..])! != 46) return INVALID_CENTRAL_FILE_HEADER?;
 
-	if (cdfh.filename_len > 0)
-	{
-		char[] filename = mem::talloc_array(char, cdfh.filename_len);
-		in.read(filename)!;
-		cdfh.filename = ((String)filename).copy(allocator);
-	}
+	if (buf[:4] != MAGIC_NUMBER_CENTRAL[:4]) return MAGIC_NUMBER_MISMATCH?;
 
-	if (cdfh.extra_len > 0)
-	{
-		char[] extra = mem::talloc_array(char, cdfh.extra_len);
-		in.read(extra)!;
-		cdfh.extra = ((String)extra).copy(allocator);
-	}
-
-	if (cdfh.comment_len > 0)
-	{
-		char[] comment = mem::talloc_array(char, cdfh.comment_len);
-		in.read(comment)!;
-		cdfh.comment = ((String)comment).copy(allocator);
-	}
-
-	cdfh.allocator = allocator;
-
-	return cdfh;
+	c.magic_number    = read_le_32(buf[ 0:4])!;
+	c.version_used    = read_le_16(buf[ 4:2])!;
+	c.version_min     = read_le_16(buf[ 6:2])!;
+	c.flag            = read_le_16(buf[ 8:2])!;
+	c.compress_method = read_le_16(buf[10:2])!;
+	c.last_mod_time   = read_le_16(buf[12:2])!;
+	c.last_mod_date   = read_le_16(buf[14:2])!;
+	c.crc32           = read_le_32(buf[16:4])!;
+	c.compress_size   = read_le_32(buf[20:4])!;
+	c.uncompress_size = read_le_32(buf[24:4])!;
+	c.filename_len    = read_le_16(buf[28:2])!;
+	c.extra_len       = read_le_16(buf[30:2])!;
+	c.comment_len     = read_le_16(buf[32:2])!;
+	c.disk_nr         = read_le_16(buf[34:2])!;
+	c.internal_attr   = read_le_16(buf[36:2])!;
+	c.external_attr   = read_le_32(buf[38:4])!;
+	c.rel_offset      = read_le_32(buf[42:4])!;
+	c.filename        = read_n(in, c.filename_len, allocator)!;
+	c.extra           = read_n(in, c.extra_len, allocator)!;
+	c.comment         = read_n(in, c.comment_len, allocator)!;
+	c.allocator       = allocator;
 }
 
 <*
  Local file header
 *>
-struct ZipLFH
+struct ZipLocalFileHeader
 {
-	uint magic_number;
-	ushort version_min;
-	ushort flag;
-	ushort compress_method;
-	ushort last_mod_time;
-	ushort last_mod_date;
-	uint crc32; // of uncompressed data
-	uint compress_size;
-	uint uncompress_size;
-	ushort filename_len; // n
-	ushort extra_len; // m
-	String filename; // filename.len == n
-	String extra; // extra.len == m
+	uint      magic_number;
+	ushort    version_min;
+	ushort    flag;
+	ushort    compress_method;
+	ushort    last_mod_time;
+	ushort    last_mod_date;
+	uint      crc32; 		// of uncompressed data
+	uint      compress_size;
+	uint      uncompress_size;
+	ushort    filename_len; 	// n
+	ushort    extra_len; 		// m
+	String    filename; 		// filename.len == n
+	String    extra; 		// extra.len == m
 	Allocator allocator;
 }
 
-fn void ZipLFH.free(&self)
+fn void ZipLocalFileHeader.free(&self)
 {
 	if (!self.allocator) return;
 	allocator::free(self.allocator, self.filename);
@@ -206,45 +250,70 @@ fn void ZipLFH.free(&self)
 	*self = {};
 }
 
-fn ZipLFH? parse_lfh(InStream in, Allocator allocator = mem) => @pool()
+fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) => @pool()
 {
-	ZipLFH lfh;
+	char[30] buf;
 
-	lfh.magic_number    = read_le_32(in)!;
-	lfh.version_min     = read_le_16(in)!;
-	lfh.flag            = read_le_16(in)!;
-	lfh.compress_method = read_le_16(in)!;
-	lfh.last_mod_time   = read_le_16(in)!;
-	lfh.last_mod_date   = read_le_16(in)!;
-	lfh.crc32           = read_le_32(in)!;
-	lfh.compress_size   = read_le_32(in)!;
-	lfh.uncompress_size = read_le_32(in)!;
-	lfh.filename_len    = read_le_16(in)!;
-	lfh.extra_len       = read_le_16(in)!;
+	if (in.read(buf[..])! != 30) return INVALID_LOCAL_FILE_HEADER?;
 
-	if (lfh.filename_len > 0)
-	{
-		char[] filename = mem::talloc_array(char, lfh.filename_len);
-		in.read(filename)!;
-		lfh.filename = ((String)filename).copy(allocator);
-	}
+	if (buf[:4] != MAGIC_NUMBER_LOCAL[:4]) return MAGIC_NUMBER_MISMATCH?;
 
-	if (lfh.extra_len > 0)
-	{
-		char[] extra = mem::talloc_array(char, lfh.extra_len);
-		in.read(extra)!;
-		lfh.extra = ((String)extra).copy(allocator);
-	}
-
-	lfh.allocator = allocator;
-
-	return lfh;
+	f.magic_number    = read_le_32(buf[ 0:4])!;
+	f.version_min     = read_le_16(buf[ 4:2])!;
+	f.flag            = read_le_16(buf[ 6:2])!;
+	f.compress_method = read_le_16(buf[ 8:2])!;
+	f.last_mod_time   = read_le_16(buf[10:2])!;
+	f.last_mod_date   = read_le_16(buf[12:2])!;
+	f.crc32           = read_le_32(buf[14:4])!;
+	f.compress_size   = read_le_32(buf[18:4])!;
+	f.uncompress_size = read_le_32(buf[22:4])!;
+	f.filename_len    = read_le_16(buf[26:2])!;
+	f.extra_len       = read_le_16(buf[28:2])!;
+	f.filename        = read_n(in, f.filename_len, allocator)!;
+	f.extra           = read_n(in, f.extra_len, allocator)!;
+	f.allocator       = allocator;
 }
+
+fn String? read_n(InStream f, usz n, Allocator allocator) @private => @pool()
+{
+	if (n == 0) return "";
+	char[] buf = mem::talloc_array(char, n);
+	usz read = 0;
+	while (read < n)
+	{
+		read += f.read(buf[read : n - read])!;
+	}
+	return ((String)buf[:n]).copy(allocator);
+}
+
+<*
+ Pack two bytes into a ushort (little-endian).
+
+ @require p.len >= 2
+*>
+fn ushort? read_le_16(char[] p) @inline @private
+{
+	return ((ushort) p[0]) | ((ushort) p[1] << 8);
+}
+
+<*
+ Pack four bytes into an uint (little-endian).
+
+ @require p.len >= 4
+*>
+fn uint? read_le_32(char[] p) @inline @private
+{
+	return ((uint) p[0]) |
+		((uint) p[1] << 8) |
+		((uint) p[2] << 16) |
+		((uint) p[3] << 24);
+}
+
 
 <*
  Scan from the end of the file for the end of central directory (EOCD) record
 *>
-fn usz? find_eocd_record(InStream in)
+fn usz? find_end_record(InStream in)
 {
 	usz i, n, size, offset;
 	char[256] buf;
@@ -259,49 +328,12 @@ fn usz? find_eocd_record(InStream in)
 		in.seek(-offset, Seek.END)!;
 		n = in.read(&buf)!;
 
-		// Scan for EOCD magic number
-		if (try loc = ((String)buf[:n]).index_of((String)MAGIC_NUMBER_EOCD[:4]))
+		// Scan for end record magic number
+		if (try loc = ((String)buf[:n]).index_of(MAGIC_NUMBER_END[:4]))
 		{
 			return size - offset + loc;
 		}
 	}
 
 	return NOT_FOUND?;
-}
-
-// FIXME: unused
-// fn usz? rindex_of(char[] buf, char[] sub)
-// {
-// 	usz needed = sub.len;
-// 	if (needed > 0 && buf.len >= needed)
-// 	{
-// 		char first = sub[0];
-// 		foreach_r (i, c : buf[..^needed])
-// 		{
-// 			if (c == first && buf[i : needed] == sub) return i;
-// 		}
-// 	}
-// 	return NOT_FOUND?;
-// }
-
-fn void test_read_eocd_record() @test => @pool()
-{
-	char[*] file = {0x00,0x50,0x4B,0x05,0x06,0x00,0x00,0x00,0x00,
-			     0x00,0x00,0x00,0x00,0x01,0x02,0x03,0x04,
-			     0x00,0x00,0x00,0x00,0x00,0x00};
-
-	InStream in = (ByteReader){}.init(file[..]);
-	// Find record
-	usz loc = find_eocd_record(in)!!;
-	assert(loc == 1);
-
-	// Set file to the start of the eocd record
-	in.seek(loc, Seek.SET)!!;
-
-	// Parse record
-	ZipEOCD record = parse_eocd(in)!!;
-	assert(record.magic_number == 0x06054b50,
-		"got: %d, but want: %d", record.magic_number, 0x06054b50);
-	assert(record.size_bytes == 0x04030201,
-		"got: %d, but want: %d", record.size_bytes, 0x04030201);
 }

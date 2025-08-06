@@ -4,8 +4,8 @@
 	"output": "build",
 	"sources": [ "src/*" ],
 	"test-sources": [ "test/*" ],
-	"dependencies": [ "tinf" ],
-	"dependency-search-paths": [ "lib" ],
+	//"dependencies": [ "tinf" ],
+	//"dependency-search-paths": [ "lib" ],
 	"targets": {
 		"test": {
 			"type": "executable"
