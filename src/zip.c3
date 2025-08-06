@@ -12,7 +12,8 @@ const char[*] MAGIC_NUMBER_CENTRAL = {0x50, 0x4b, 0x01, 0x02};
 const char[*] MAGIC_NUMBER_LOCAL   = {0x50, 0x4b, 0x03, 0x04};
 
 faultdef NOT_FOUND, INVALID_END_RECORD, INVALID_CENTRAL_FILE_HEADER,
-	INVALID_LOCAL_FILE_HEADER, MAGIC_NUMBER_MISMATCH;
+	INVALID_LOCAL_FILE_HEADER, MAGIC_NUMBER_MISMATCH,
+	UNSUPPORTED_COMPRESSION_METHOD;
 
 alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
 
@@ -93,6 +94,35 @@ fn usz Zip.len(&z) @operator(len)
 fn ZipFile Zip.get(&z, usz index) @operator([])
 {
 	return {z.central_headers[index], z.local_headers[index]};
+}
+
+<*
+ Writes the uncompressed data to OutStream out.
+*>
+fn usz? ZipFile.copy_to(&zf, InStream file, OutStream out)
+{
+	ZipCentralFileHeader cf;
+	ZipLocalFileHeader lf;
+	zf.unpack(&cf, &lf);
+
+	uint loc = cf.rel_offset + 30 + lf.filename_len + lf.extra_len;
+	file.seek(loc, Seek.SET)!;
+
+	LimitReader reader;
+	reader.init(file, lf.compress_size);
+
+	switch (cf.compress_method)
+	{
+		case COMPRESS_METHOD_STORE:
+			return io::copy_to(&reader, out);
+		case COMPRESS_METHOD_DEFLATE:
+			// FIXME: This is not correct and just for debugging.
+			return io::copy_to(&reader, out);
+		case COMPRESS_METHOD_BZIP2:
+		default:
+			return UNSUPPORTED_COMPRESSION_METHOD?;
+
+	}
 }
 
 <*
