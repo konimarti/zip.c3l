@@ -192,28 +192,22 @@ fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
 <*
  Filename with forward slash ('/') as separator according to 4.4.16 of the spec.
 
- @require zf.first.filename == zf.second.filename : "Inconsistent filenames between Center and Local file headers"
+ TODO: Check for unicode filename (bit 11 in flags or extra fields)
 *>
 fn String ZipFile.filename(&zf) => zf.first.filename;
 
 <*
  Compressed Size (as it is stored in Zip archive).
-
- @require zf.first.compress_size == zf.second.compress_size : "Inconsistent compressed size between Center and Local file headers"
 *>
 fn usz ZipFile.compressed_size(&zf) => (usz)zf.first.compress_size;
 
 <*
  Uncompressed Size (after extraction and uncompression).
-
- @require zf.first.uncompress_size == zf.second.uncompress_size : "Inconsistent size between Center and Local file headers"
 *>
 fn usz ZipFile.uncompressed_size(&zf) => (usz)zf.first.uncompress_size;
 
 <*
  CRC32 of uncompressed data.
-
- @require zf.first.crc32 == zf.second.crc32 : "Inconsistent crc32 between Center and Local file headers"
 *>
 fn uint ZipFile.crc32(&zf) => zf.first.crc32;
 
