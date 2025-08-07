@@ -37,6 +37,66 @@ faultdef NOT_FOUND,
 	UNSUPPORTED_COMPRESSION_METHOD,
 	UNSUPPORTED_ZIP64;
 
+<*
+ ls lists the filenames in the ZIP archive.
+*>
+fn PathList? ls(Allocator allocator, InStream file) => @pool()
+{
+	Zip z;
+	z.tparse(file)!;
+
+	PathList list;
+	list.init(allocator);
+	defer catch list.free();
+
+	foreach (zip_file : z)
+	{
+		String path_str = path::normalize(zip_file.filename(), PathEnv.POSIX)!;
+		Path path = path::new(allocator, path_str)!!;
+		list.push(path);
+	}
+	return list;
+}
+
+<*
+ Extracts the files to the folder
+
+ @require path::is_dir(base_folder) : "Folder must be a directory"
+*>
+fn void? extract(InStream file, Path base_folder) => @pool()
+{
+	Zip z;
+	z.tparse(file)!;
+
+	String filename, path_str;
+	Path   folder, path;
+	bool   is_directory;
+
+	foreach (zip_file : z)
+	{
+		filename = zip_file.filename();
+		is_directory = filename.ends_with("/");
+
+		// Normalize path from UNIX sep to whatever is used
+		path_str = path::normalize(zip_file.filename(), PathEnv.POSIX)!;
+		path = base_folder.tappend(path_str)!;
+
+		// Build directory structure
+		if (is_directory)
+		{
+			path::mkdir(path, true)!;
+			continue;
+		}
+		path::mkdir(path.dirname(), true)!;
+
+		// Extract file
+		File save = file::open(path.str_view(), "w")!;
+		zip_file.copy_to(file, &save)!;
+		save.close()!;
+	}
+}
+
+
 alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
 
 <*
@@ -50,6 +110,7 @@ struct Zip (Printable)
 	Allocator	       allocator;
 }
 
+fn void? Zip.tparse(&z, InStream file) => z.parse(file, tmem);
 fn void? Zip.parse(&z, InStream file, Allocator allocator)
 {
 	usz nrecords, end_record_loc;
@@ -110,6 +171,12 @@ fn usz Zip.len(&z) @operator(len)
 fn ZipFile Zip.get(&z, usz index) @operator([])
 {
 	return {z.central_headers[index], z.local_headers[index]};
+}
+
+fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
+{
+	return f.printf("%-40s %-12d %-12d %-12d\n",
+			zf.filename(), zf.compressed_size(), zf.uncompressed_size(), zf.compression_method());
 }
 
 <*
