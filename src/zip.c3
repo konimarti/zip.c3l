@@ -1,3 +1,10 @@
+<*
+ Archive::zip provides the functionality to handle the ZIP format.
+
+ ZIP specification: https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
+ AES encryption:    https://www.winzip.com/en/support/aes-encryption/
+
+*>
 module archive::zip;
 
 import std::io;
@@ -10,10 +17,16 @@ alias CompressMethod = uint;
 const CompressMethod COMPRESS_METHOD_STORE   = 0;
 const CompressMethod COMPRESS_METHOD_DEFLATE = 8;
 const CompressMethod COMPRESS_METHOD_BZIP2   = 12; // TODO: unsupported
+const CompressMethod COMPRESS_METHOD_ZSTD    = 93; // TODO: unsupported
+const CompressMethod COMPRESS_METHOD_MP3     = 94; // TODO: unsupported
+const CompressMethod COMPRESS_METHOD_XZ      = 95; // TODO: unsupported
+const CompressMethod COMPRESS_METHOD_JPEG    = 96; // TODO: unsupported
+const CompressMethod COMPRESS_METHOD_AEX     = 99; // TODO: unsupported
 
-const char[*] MAGIC_NUMBER_END     = {0x50, 0x4b, 0x05, 0x06};
 const char[*] MAGIC_NUMBER_CENTRAL = {0x50, 0x4b, 0x01, 0x02};
 const char[*] MAGIC_NUMBER_LOCAL   = {0x50, 0x4b, 0x03, 0x04};
+const char[*] MAGIC_NUMBER_END     = {0x50, 0x4b, 0x05, 0x06};
+const char[*] MAGIC_NUMBER_DESCR   = {0x50, 0x4b, 0x07, 0x08}; // optional
 
 faultdef NOT_FOUND,
 	INVALID_END_RECORD,
@@ -21,7 +34,8 @@ faultdef NOT_FOUND,
 	INVALID_LOCAL_FILE_HEADER,
 	INVALID_CRC32_HASH,
 	MAGIC_NUMBER_MISMATCH,
-	UNSUPPORTED_COMPRESSION_METHOD;
+	UNSUPPORTED_COMPRESSION_METHOD,
+	UNSUPPORTED_ZIP64;
 
 alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
 
@@ -99,7 +113,7 @@ fn ZipFile Zip.get(&z, usz index) @operator([])
 }
 
 <*
- Filename
+ Filename with forward slash ('/') as separator according to 4.4.16 of the spec.
 
  @require zf.first.filename == zf.second.filename : "Inconsistent filenames between Center and Local file headers"
 *>
@@ -155,7 +169,6 @@ fn LimitReader? ZipFile.reader(&zf, InStream file)
 *>
 fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 {
-	uint hash;
 	char[] src, dst;
 
 	dst = mem::temp_array(char, zf.uncompressed_size());
@@ -186,8 +199,7 @@ fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 	}
 
 	// Verify crc32 hash
-	hash = crc32::hash(dst);
-	if (hash != zf.crc32()) return INVALID_CRC32_HASH?;
+	if (crc32::hash(dst) != zf.crc32()) return INVALID_CRC32_HASH?;
 
 	// Write data
 	return io::write_all(writer, dst);
@@ -239,27 +251,60 @@ fn void? ZipEndRecord.parse(&r, InStream in, Allocator allocator = mem) => @pool
 
 	if (buf[:4] != MAGIC_NUMBER_END[:4]) return MAGIC_NUMBER_MISMATCH?;
 
-	r.magic_number   = read_le_32(buf[ 0:4])!;
-	r.number_of_disk = read_le_16(buf[ 4:2])!;
-	r.disk_start     = read_le_16(buf[ 6:2])!;
-	r.nr_records     = read_le_16(buf[ 8:2])!;
-	r.tot_nr_records = read_le_16(buf[10:2])!;
-	r.size_bytes     = read_le_32(buf[12:4])!;
-	r.rel_offset     = read_le_32(buf[16:4])!;
-	r.comment_len    = read_le_16(buf[20:2])!;
+	r.magic_number   = read_le_32(buf[ 0:4]);
+	r.number_of_disk = read_le_16(buf[ 4:2]);
+	r.disk_start     = read_le_16(buf[ 6:2]);
+	r.nr_records     = read_le_16(buf[ 8:2]);
+	r.tot_nr_records = read_le_16(buf[10:2]);
+	r.size_bytes     = read_le_32(buf[12:4]);
+	r.rel_offset     = read_le_32(buf[16:4]);
+	r.comment_len    = read_le_16(buf[20:2]);
 	r.comment        = read_n(in, r.comment_len, allocator)!;
 	r.allocator      = allocator;
 }
 
 <*
+ General-purpose bit flag with only the relevant flags.
+*>
+bitstruct ZipFlag : ushort
+{
+	bool encrypted      :  0;	// indicates if file is encrypted
+	bool use_descriptor :  3;	// crc32, sizes are unset; use Data Descriptor
+	bool efs            : 11;	// language encoding flag
+}
+
+<*
  Central directory file header (CDFH)
+
+  central file header signature   4 bytes  (0x02014b50)
+  version made by                 2 bytes
+  version needed to extract       2 bytes
+  general purpose bit flag        2 bytes
+  compression method              2 bytes
+  last mod file time              2 bytes
+  last mod file date              2 bytes
+  crc-32                          4 bytes
+  compressed size                 4 bytes
+  uncompressed size               4 bytes
+  file name length                2 bytes
+  extra field length              2 bytes
+  file comment length             2 bytes
+  disk number start               2 bytes
+  internal file attributes        2 bytes
+  external file attributes        4 bytes
+  relative offset of local header 4 bytes
+
+  file name (variable size)
+  extra field (variable size)
+  file comment (variable size)
+
 *>
 struct ZipCentralFileHeader
 {
 	uint      magic_number;
 	ushort    version_used;
 	ushort    version_min;
-	ushort    flag;
+	ZipFlag   flag;
 	ushort    compress_method;
 	ushort    last_mod_time;
 	ushort    last_mod_date;
@@ -296,23 +341,23 @@ fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) 
 
 	if (buf[:4] != MAGIC_NUMBER_CENTRAL[:4]) return MAGIC_NUMBER_MISMATCH?;
 
-	c.magic_number    = read_le_32(buf[ 0:4])!;
-	c.version_used    = read_le_16(buf[ 4:2])!;
-	c.version_min     = read_le_16(buf[ 6:2])!;
-	c.flag            = read_le_16(buf[ 8:2])!;
-	c.compress_method = read_le_16(buf[10:2])!;
-	c.last_mod_time   = read_le_16(buf[12:2])!;
-	c.last_mod_date   = read_le_16(buf[14:2])!;
-	c.crc32           = read_le_32(buf[16:4])!;
-	c.compress_size   = read_le_32(buf[20:4])!;
-	c.uncompress_size = read_le_32(buf[24:4])!;
-	c.filename_len    = read_le_16(buf[28:2])!;
-	c.extra_len       = read_le_16(buf[30:2])!;
-	c.comment_len     = read_le_16(buf[32:2])!;
-	c.disk_nr         = read_le_16(buf[34:2])!;
-	c.internal_attr   = read_le_16(buf[36:2])!;
-	c.external_attr   = read_le_32(buf[38:4])!;
-	c.rel_offset      = read_le_32(buf[42:4])!;
+	c.magic_number    = read_le_32(buf[ 0:4]);
+	c.version_used    = read_le_16(buf[ 4:2]);
+	c.version_min     = read_le_16(buf[ 6:2]);
+	c.flag            = (ZipFlag)read_le_16(buf[ 8:2]);
+	c.compress_method = read_le_16(buf[10:2]);
+	c.last_mod_time   = read_le_16(buf[12:2]);
+	c.last_mod_date   = read_le_16(buf[14:2]);
+	c.crc32           = read_le_32(buf[16:4]);
+	c.compress_size   = read_le_32(buf[20:4]);
+	c.uncompress_size = read_le_32(buf[24:4]);
+	c.filename_len    = read_le_16(buf[28:2]);
+	c.extra_len       = read_le_16(buf[30:2]);
+	c.comment_len     = read_le_16(buf[32:2]);
+	c.disk_nr         = read_le_16(buf[34:2]);
+	c.internal_attr   = read_le_16(buf[36:2]);
+	c.external_attr   = read_le_32(buf[38:4]);
+	c.rel_offset      = read_le_32(buf[42:4]);
 	c.filename        = read_n(in, c.filename_len, allocator)!;
 	c.extra           = read_n(in, c.extra_len, allocator)!;
 	c.comment         = read_n(in, c.comment_len, allocator)!;
@@ -321,12 +366,28 @@ fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) 
 
 <*
  Local file header
+
+  local file header signature     4 bytes  (0x04034b50)
+  version needed to extract       2 bytes
+  general purpose bit flag        2 bytes
+  compression method              2 bytes
+  last mod file time              2 bytes
+  last mod file date              2 bytes
+  crc-32                          4 bytes
+  compressed size                 4 bytes
+  uncompressed size               4 bytes
+  file name length                2 bytes
+  extra field length              2 bytes
+
+  file name (variable size)
+  extra field (variable size)
+
 *>
 struct ZipLocalFileHeader
 {
 	uint      magic_number;
 	ushort    version_min;
-	ushort    flag;
+	ZipFlag   flag;
 	ushort    compress_method;
 	ushort    last_mod_time;
 	ushort    last_mod_date;
@@ -356,20 +417,48 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 
 	if (buf[:4] != MAGIC_NUMBER_LOCAL[:4]) return MAGIC_NUMBER_MISMATCH?;
 
-	f.magic_number    = read_le_32(buf[ 0:4])!;
-	f.version_min     = read_le_16(buf[ 4:2])!;
-	f.flag            = read_le_16(buf[ 6:2])!;
-	f.compress_method = read_le_16(buf[ 8:2])!;
-	f.last_mod_time   = read_le_16(buf[10:2])!;
-	f.last_mod_date   = read_le_16(buf[12:2])!;
-	f.crc32           = read_le_32(buf[14:4])!;
-	f.compress_size   = read_le_32(buf[18:4])!;
-	f.uncompress_size = read_le_32(buf[22:4])!;
-	f.filename_len    = read_le_16(buf[26:2])!;
-	f.extra_len       = read_le_16(buf[28:2])!;
+	f.magic_number    = read_le_32(buf[ 0:4]);
+	f.version_min     = read_le_16(buf[ 4:2]);
+	f.flag            = (ZipFlag)read_le_16(buf[ 6:2]);
+	f.compress_method = read_le_16(buf[ 8:2]);
+	f.last_mod_time   = read_le_16(buf[10:2]);
+	f.last_mod_date   = read_le_16(buf[12:2]);
+	f.crc32           = read_le_32(buf[14:4]);
+	f.compress_size   = read_le_32(buf[18:4]);
+	f.uncompress_size = read_le_32(buf[22:4]);
+	f.filename_len    = read_le_16(buf[26:2]);
+	f.extra_len       = read_le_16(buf[28:2]);
 	f.filename        = read_n(in, f.filename_len, allocator)!;
 	f.extra           = read_n(in, f.extra_len, allocator)!;
 	f.allocator       = allocator;
+}
+
+<*
+ Data descriptor
+
+  crc-32                          4 bytes
+  compressed size                 4 bytes (8 bytes for ZIP64)
+  uncompressed size               4 bytes (8 bytes for ZIP64)
+
+ This descriptor MUST exist if bit 3 of the general purpose bit flag is set. It
+ is byte aligned and immediately follows the last byte of compressed data. This
+ descriptor SHOULD be used only when it was not possible to seek in the output
+ .ZIP file, e.g., when the output .ZIP file was standard output or a
+ non-seekable device. For ZIP64(tm) format archives, the compressed and
+ uncompressed sizes are 8 bytes each.
+
+*>
+struct ZipDataDescriptor
+{
+	uint crc32;
+	union {
+		uint compress_size;
+		ulong compress_size_zip64;
+	}
+	union {
+		uint uncompress_size;
+		ulong uncompress_size_zip64;
+	}
 }
 
 fn String? read_n(InStream f, usz n, Allocator allocator) @private => @pool()
@@ -389,7 +478,7 @@ fn String? read_n(InStream f, usz n, Allocator allocator) @private => @pool()
 
  @require p.len >= 2
 *>
-fn ushort? read_le_16(char[] p) @inline @private
+fn ushort read_le_16(char[] p) @inline @private
 {
 	return ((ushort) p[0]) | ((ushort) p[1] << 8);
 }
@@ -399,12 +488,29 @@ fn ushort? read_le_16(char[] p) @inline @private
 
  @require p.len >= 4
 *>
-fn uint? read_le_32(char[] p) @inline @private
+fn uint read_le_32(char[] p) @inline @private
 {
 	return ((uint) p[0]) |
 		((uint) p[1] << 8) |
 		((uint) p[2] << 16) |
 		((uint) p[3] << 24);
+}
+
+<*
+ Pack eight bytes into an ulong (little-endian).
+
+ @require p.len >= 8
+*>
+fn ulong read_le_64(char[] p) @inline @private
+{
+	return ((ulong) p[0]) |
+		((ulong) p[1] << 8) |
+		((ulong) p[2] << 16) |
+		((ulong) p[3] << 24) |
+		((ulong) p[4] << 32) |
+		((ulong) p[5] << 40) |
+		((ulong) p[6] << 48) |
+		((ulong) p[7] << 56);
 }
 
 
