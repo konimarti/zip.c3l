@@ -33,20 +33,16 @@ fn void? Zip.parse(&z, InStream file, Allocator allocator)
 	usz nrecords, end_record_loc;
 
 	end_record_loc = find_end_record(file)!;
-
 	file.seek(end_record_loc, Seek.SET)!;
+
+	z.allocator = allocator;
+	defer catch z.free();
+
 	z.record.parse(file, allocator)!;
-	// TODO: Fix memory handling when error occurs
-	// defer catch z.record.free();
+
 	nrecords = z.record.tot_nr_records;
-
 	z.central_headers = allocator::new_array(allocator, ZipCentralFileHeader, nrecords);
-	// TODO: Fix memory handling when error occurs
-	// defer catch allocator::free(allocator, z.central_headers);
-
 	z.local_headers = allocator::new_array(allocator, ZipLocalFileHeader, nrecords);
-	// TODO: Fix memory handling when error occurs
-	// defer catch allocator::free(allocator, z.local_headers);
 
 	// Read central file headers
 	file.seek(z.record.rel_offset, Seek.SET)!;
@@ -61,8 +57,6 @@ fn void? Zip.parse(&z, InStream file, Allocator allocator)
 		file.seek(z.central_headers[i].rel_offset, Seek.SET)!;
 		local_header.parse(file, allocator)!;
 	}
-
-	z.allocator = allocator;
 }
 
 fn void Zip.free(&z)
@@ -97,31 +91,44 @@ fn ZipFile Zip.get(&z, usz index) @operator([])
 }
 
 <*
- Writes the uncompressed data to OutStream out.
+ Returns an InStream to read the compressed data for the given file.
+ Don't close the returned InStream.
 *>
-fn usz? ZipFile.copy_to(&zf, InStream file, OutStream out)
+fn InStream? ZipFile.compressed_data(&zf, InStream file)
 {
 	ZipCentralFileHeader cf;
 	ZipLocalFileHeader lf;
+
 	zf.unpack(&cf, &lf);
 
 	uint loc = cf.rel_offset + 30 + lf.filename_len + lf.extra_len;
 	file.seek(loc, Seek.SET)!;
 
-	LimitReader reader;
-	reader.init(file, lf.compress_size);
+	return (LimitReader){}.init(file, lf.compress_size);
+}
 
-	switch (cf.compress_method)
+<*
+ Decompress data and write it to OutStream out.
+*>
+fn usz? ZipFile.copy_to(&zf, InStream file, OutStream out)
+{
+	switch (zf.first.compress_method)
 	{
 		case COMPRESS_METHOD_STORE:
-			return io::copy_to(&reader, out);
+			return io::copy_to(zf.compressed_data(file), out);
 		case COMPRESS_METHOD_DEFLATE:
-			// FIXME: This is not correct and just for debugging.
-			return io::copy_to(&reader, out);
+			@pool() {
+				char[] src = mem::temp_array(char, zf.first.compress_size);
+				io::read_all(zf.compressed_data(file), src)!;
+
+				char[] dst = mem::temp_array(char, zf.first.uncompress_size);
+				// inflate::uncompress(dst, src)!;
+
+				return io::copy_to(&&io::wrap_bytes(dst), out);
+			};
 		case COMPRESS_METHOD_BZIP2:
 		default:
 			return UNSUPPORTED_COMPRESSION_METHOD?;
-
 	}
 }
 
