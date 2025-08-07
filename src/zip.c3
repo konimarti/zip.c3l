@@ -32,6 +32,7 @@ faultdef NOT_FOUND,
 	INVALID_END_RECORD,
 	INVALID_CENTRAL_FILE_HEADER,
 	INVALID_LOCAL_FILE_HEADER,
+	INVALID_DATA_DESCRIPTOR,
 	INVALID_CRC32_HASH,
 	MAGIC_NUMBER_MISMATCH,
 	UNSUPPORTED_COMPRESSION_METHOD,
@@ -136,10 +137,18 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 	}
 
 	// Read local file headers
+	usz offset;
 	foreach (i, &local_header : z.local_headers)
 	{
-		file.seek(z.central_headers[i].rel_offset, Seek.SET)!;
+		offset = z.central_headers[i].rel_offset;
+		file.seek(offset, Seek.SET)!;
 		local_header.parse(file, allocator)!;
+		if (local_header.flag.use_descriptor)
+		{
+			offset += z.central_headers[i].compress_size; // TODO: make a function that can handle zip64?
+			file.seek(offset, Seek.SET)!;
+			local_header.data_descriptor.parse(file)!;
+		}
 	}
 }
 
@@ -382,7 +391,7 @@ struct ZipCentralFileHeader
 	ushort    filename_len; 	// n
 	ushort    extra_len; 		// m
 	ushort    comment_len; 		// k
-	ushort    disk_nr; 		// where file starts
+	ushort    disk_nr; 		// disk on which file starts
 	ushort    internal_attr;
 	uint      external_attr;
 	uint      rel_offset; 		// relative offset of local file header
@@ -467,6 +476,8 @@ struct ZipLocalFileHeader
 	String    filename; 		// filename.len == n
 	String    extra; 		// extra.len == m
 	Allocator allocator;
+
+	ZipDataDescriptor data_descriptor;
 }
 
 fn void ZipLocalFileHeader.free(&self)
@@ -526,6 +537,26 @@ struct ZipDataDescriptor
 	union {
 		uint uncompress_size;
 		ulong uncompress_size_zip64;
+	}
+}
+
+fn void? ZipDataDescriptor.parse(&d, InStream in, bool zip64 = false)
+{
+	char[20] buf;
+	usz n = zip64 ? 20 : 12;
+	if (in.read(buf[:n])! != n) return INVALID_DATA_DESCRIPTOR?;
+
+	d.crc32 = read_le_32(buf[0:4]);
+
+	if (!zip64)
+	{
+		d.compress_size   = read_le_32(buf[4:4]);
+		d.uncompress_size = read_le_32(buf[8:4]);
+	}
+	else
+	{
+		d.compress_size_zip64   = read_le_64(buf[ 4:8]);
+		d.uncompress_size_zip64 = read_le_64(buf[12:8]);
 	}
 }
 
