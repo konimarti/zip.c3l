@@ -25,8 +25,8 @@ fn void test_read_end_records() => @pool()
 	ZipEndRecord r;
 	r.parse(in)!!;
 
-	assert(r.magic_number == 0x06054b50,
-		"got: %d, but want: %d", r.magic_number, 0x06054b50);
+	assert(r.signature == 0x06054b50,
+		"got: %d, but want: %d", r.signature, 0x06054b50);
 
 	assert(r.size_bytes == 0x04030201,
 		"got: %d, but want: %d", r.size_bytes, 0x04030201);
