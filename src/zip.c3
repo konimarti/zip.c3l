@@ -8,7 +8,6 @@
 module archive::zip;
 
 import std::io;
-import std::collections::pair;
 import std::hash::crc32;
 
 import tinf::inflate;
@@ -75,7 +74,7 @@ fn void? extract(InStream file, Path base_folder) => @pool()
 
 	foreach (zip_file : z)
 	{
-		filename = zip_file.filename();
+		filename = zip_file.filename()!;
 		is_directory = filename.ends_with("/");
 
 		// Normalize path from UNIX sep to whatever is used
@@ -97,19 +96,15 @@ fn void? extract(InStream file, Path base_folder) => @pool()
 	}
 }
 
-
-alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
-
 <*
- Store the metadata for a zip archive. Metadata includes local and central file
- headers and end records.
+ Store the metadata for a zip archive. Metadata includes local, central file
+ headers and data descriptor as well as the end record.
 *>
 struct ZipMeta (Printable)
 {
-	ZipEndRecord 	       record;
-	ZipCentralFileHeader[] central_headers;
-	ZipLocalFileHeader[]   local_headers;
-	Allocator	       allocator;
+	ZipEndRecord record;
+	ZipFile[]    files;
+	Allocator    allocator;
 }
 
 fn void? ZipMeta.tparse(&z, InStream file) => z.parse(file, tmem);
@@ -126,28 +121,27 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 	z.record.parse(file, allocator)!;
 
 	nrecords = z.record.tot_nr_records;
-	z.central_headers = allocator::new_array(allocator, ZipCentralFileHeader, nrecords);
-	z.local_headers = allocator::new_array(allocator, ZipLocalFileHeader, nrecords);
+	z.files = allocator::new_array(allocator, ZipFile, nrecords);
 
 	// Read central file headers
 	file.seek(z.record.rel_offset, Seek.SET)!;
-	foreach (&central_header : z.central_headers)
+	foreach (&zip_file : z.files)
 	{
-		central_header.parse(file, allocator)!;
+		zip_file.central_header.parse(file, allocator)!;
 	}
 
 	// Read local file headers
 	usz offset;
-	foreach (i, &local_header : z.local_headers)
+	foreach (&zip_file : z.files)
 	{
-		offset = z.central_headers[i].rel_offset;
+		offset = zip_file.central_header.rel_offset;
 		file.seek(offset, Seek.SET)!;
-		local_header.parse(file, allocator)!;
-		if (local_header.flag.use_descriptor)
+		zip_file.local_header.parse(file, allocator)!;
+		if (zip_file.local_header.flag.use_descriptor)
 		{
-			offset += z.central_headers[i].compress_size; // TODO: make a function that can handle zip64?
+			offset += zip_file.central_header.compress_size; // TODO: make a function that can handle zip64?
 			file.seek(offset, Seek.SET)!;
-			local_header.data_descriptor.parse(file)!;
+			zip_file.data_descriptor.parse(file)!;
 		}
 	}
 }
@@ -158,11 +152,8 @@ fn void ZipMeta.free(&z)
 
 	z.record.free();
 
-	foreach (&c : z.central_headers) c.free();
-	allocator::free(z.allocator, z.central_headers);
-
-	foreach (&l : z.local_headers) l.free();
-	allocator::free(z.allocator, z.local_headers);
+	foreach (&zip_file : z.files) zip_file.free();
+	allocator::free(z.allocator, z.files);
 
 	*z = {};
 }
@@ -173,14 +164,25 @@ fn usz? ZipMeta.to_format(&z, Formatter *f) @dynamic
 	return 0;
 }
 
-fn usz ZipMeta.len(&z) @operator(len)
+fn usz ZipMeta.len(&z) @operator(len) => z.record.tot_nr_records;
+
+fn ZipFile ZipMeta.get(&z, usz index) @operator([]) => z.files[index];
+
+
+<*
+ ZipFile contains the metadata for a file entry in the zip archive.
+*>
+struct ZipFile
 {
-	return z.record.tot_nr_records;
+	ZipCentralFileHeader central_header;
+	ZipLocalFileHeader   local_header;
+	ZipDataDescriptor    data_descriptor;
 }
 
-fn ZipFile ZipMeta.get(&z, usz index) @operator([])
+fn void ZipFile.free(&self)
 {
-	return {z.central_headers[index], z.local_headers[index]};
+	self.central_header.free();
+	self.local_header.free();
 }
 
 fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
@@ -191,32 +193,45 @@ fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
 
 <*
  Filename with forward slash ('/') as separator according to 4.4.16 of the spec.
-
- TODO: Check for unicode filename (bit 11 in flags or extra fields)
 *>
-fn String ZipFile.filename(&zf) => zf.first.filename;
+fn String? ZipFile.filename(&zf)
+{
+	// If language encoding flag is set, use filename directly
+	if (zf.central_header.flag.efs) return zf.central_header.filename;
+
+	// If a Unicode Path Extra field is present, use this
+	if (try data = find_extra_header(zf.central_header.extra, UNICODE_PATH_HEADER))
+	{
+		UnicodePathExtraField path;
+		path.parse(data)!;
+		return (String)path.unicode;
+	}
+
+	// Otherwise, just use what we have
+	return zf.central_header.filename;
+}
 
 <*
  Compressed Size (as it is stored in Zip archive).
 *>
-fn usz ZipFile.compressed_size(&zf) => (usz)zf.first.compress_size;
+fn ulong ZipFile.compressed_size(&zf) => (ulong)zf.central_header.compress_size;
 
 <*
  Uncompressed Size (after extraction and uncompression).
 *>
-fn usz ZipFile.uncompressed_size(&zf) => (usz)zf.first.uncompress_size;
+fn ulong ZipFile.uncompressed_size(&zf) => (ulong)zf.central_header.uncompress_size;
 
 <*
  CRC32 of uncompressed data.
 *>
-fn uint ZipFile.crc32(&zf) => zf.first.crc32;
+fn uint ZipFile.crc32(&zf) => zf.central_header.crc32;
 
 <*
  CRC32 of uncompressed data.
 
- @require zf.first.compress_method == zf.second.compress_method : "Inconsistent compression method between Center and Local file headers"
+ @require zf.central_header.compress_method == zf.local_header.compress_method : "Inconsistent compression method between Center and Local file headers"
 *>
-fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.first.compress_method;
+fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.central_header.compress_method;
 
 <*
  Returns a LimitReader for the compressed (!) data of the ZipFile.
@@ -225,14 +240,10 @@ fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.first.compress_meth
 *>
 fn LimitReader? ZipFile.reader(&zf, InStream file)
 {
-	ZipCentralFileHeader cf;
-	ZipLocalFileHeader lf;
-	zf.unpack(&cf, &lf);
-
-	uint loc = cf.rel_offset + 30 + lf.filename_len + lf.extra_len;
+	uint loc = zf.central_header.rel_offset + 30 + zf.local_header.filename_len + zf.local_header.extra_len;
 	file.seek(loc, Seek.SET)!;
 
-	return { file, lf.compress_size };
+	return { file, zf.local_header.compress_size };
 }
 
 <*
@@ -470,8 +481,6 @@ struct ZipLocalFileHeader
 	String    filename; 		// filename.len == n
 	String    extra; 		// extra.len == m
 	Allocator allocator;
-
-	ZipDataDescriptor data_descriptor;
 }
 
 fn void ZipLocalFileHeader.free(&self)

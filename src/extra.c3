@@ -35,25 +35,46 @@ struct ExtraFieldIterator
 	usz    index;
 }
 
-<*
- Returns the header of the current extra block.
-*>
-fn ushort? ExtraFieldIterator.header(&self)
-{
-	if (self.extra.len < 2) return io::EOF?;
-	return read_le_16(self.extra[self.index:2]);
-}
+faultdef INVALID_EXTRA_FIELD_LENGTH;
 
 <*
  Returns the next extra block.
 *>
 fn char[]? ExtraFieldIterator.next(&self)
 {
-	if (self.index >= self.extra.len || self.extra.len < 4) return io::EOF?;
-	ushort len = read_le_16(self.extra[2:2]);
+	if (self.index + 4 >= self.extra.len || self.extra.len < 4) return io::EOF?;
+	ushort len = read_le_16(self.extra[self.index+2:2]) + 4;
+
+	if (self.index + len > self.extra.len) return INVALID_EXTRA_FIELD_LENGTH?;
 	char[] next = self.extra[self.index:len];
+
 	self.index += len;
+
 	return next;
+}
+
+<*
+ Find specific header and return it.
+
+ @!return NOT_FOUND
+*>
+fn char[]? find_extra_header(char[] extra, ushort id)
+{
+	ExtraFieldIterator it = { extra, 0 };
+	while (try data = it.next())
+	{
+		if (is_extra_header(data, id)) return data;
+	}
+	return NOT_FOUND?;
+}
+
+<*
+ Checks if data block starts with header_id
+*>
+fn bool is_extra_header(char[] data, ushort header_id) @inline
+{
+	if (data.len < 2) return false;
+	return read_le_16(data[:2]) == header_id;
 }
 
 <*
@@ -116,7 +137,7 @@ struct UnicodePathExtraField
 	ushort header_id; 	// should be 0x7075
 	ushort data_size; 	// size of "extra" block
         char   version;
-	uint   crc32;	// file name checksum
+	uint   crc32;	        // file name checksum
 	char[] unicode;
 }
 
