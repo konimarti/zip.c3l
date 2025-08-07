@@ -95,7 +95,7 @@ c0952c289095ca9280519c3891cd2038978a330a450dff6c055be8bc29c4
 fn void test_zip_archive() => @pool()
 {
 	InStream f = (ByteReader){}.init(zip_data[..]);
-	Zip z;
+	ZipMeta z;
 	z.parse(f, tmem)!!;
 	assert(z.len() == 6);
 }

@@ -42,7 +42,7 @@ faultdef NOT_FOUND,
 *>
 fn PathList? ls(Allocator allocator, InStream file) => @pool()
 {
-	Zip z;
+	ZipMeta z;
 	z.tparse(file)!;
 
 	PathList list;
@@ -65,7 +65,7 @@ fn PathList? ls(Allocator allocator, InStream file) => @pool()
 *>
 fn void? extract(InStream file, Path base_folder) => @pool()
 {
-	Zip z;
+	ZipMeta z;
 	z.tparse(file)!;
 
 	String filename, path_str;
@@ -100,9 +100,10 @@ fn void? extract(InStream file, Path base_folder) => @pool()
 alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
 
 <*
- End of central directory record (EOCD)
+ Store the metadata for a zip archive. Metadata includes local and central file
+ headers and end records.
 *>
-struct Zip (Printable)
+struct ZipMeta (Printable)
 {
 	ZipEndRecord 	       record;
 	ZipCentralFileHeader[] central_headers;
@@ -110,8 +111,8 @@ struct Zip (Printable)
 	Allocator	       allocator;
 }
 
-fn void? Zip.tparse(&z, InStream file) => z.parse(file, tmem);
-fn void? Zip.parse(&z, InStream file, Allocator allocator)
+fn void? ZipMeta.tparse(&z, InStream file) => z.parse(file, tmem);
+fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 {
 	usz nrecords, end_record_loc;
 
@@ -142,7 +143,7 @@ fn void? Zip.parse(&z, InStream file, Allocator allocator)
 	}
 }
 
-fn void Zip.free(&z)
+fn void ZipMeta.free(&z)
 {
 	if (!z.allocator) return;
 
@@ -157,18 +158,18 @@ fn void Zip.free(&z)
 	*z = {};
 }
 
-fn usz? Zip.to_format(&z, Formatter *f) @dynamic
+fn usz? ZipMeta.to_format(&z, Formatter *f) @dynamic
 {
 	// TODO: Not implemented yet.
 	return 0;
 }
 
-fn usz Zip.len(&z) @operator(len)
+fn usz ZipMeta.len(&z) @operator(len)
 {
 	return z.record.tot_nr_records;
 }
 
-fn ZipFile Zip.get(&z, usz index) @operator([])
+fn ZipFile ZipMeta.get(&z, usz index) @operator([])
 {
 	return {z.central_headers[index], z.local_headers[index]};
 }

@@ -20,7 +20,7 @@ fn void show_zip_info(String filename) => @pool()
 	File f = file::open(filename, "r")!!;
 	defer (void)f.close();
 
-	Zip z;
+	ZipMeta z;
 	z.parse(&f, tmem)!!;
 
 	// Print file info (filename, compressed and uncompressed sizes, compression)
