@@ -3,6 +3,8 @@ module archive::zip;
 import std::io;
 import std::collections::pair;
 
+import tinf::inflate;
+
 const uint COMPRESS_METHOD_STORE   = 0;
 const uint COMPRESS_METHOD_DEFLATE = 8;
 const uint COMPRESS_METHOD_BZIP2   = 12; // TODO: unsupported
@@ -122,7 +124,7 @@ fn usz? ZipFile.copy_to(&zf, InStream file, OutStream out)
 				io::read_all(zf.compressed_data(file), src)!;
 
 				char[] dst = mem::temp_array(char, zf.first.uncompress_size);
-				// inflate::uncompress(dst, src)!;
+				inflate::uncompress(dst, src)!;
 
 				return io::copy_to(&&io::wrap_bytes(dst), out);
 			};
