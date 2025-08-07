@@ -12,22 +12,25 @@ import std::hash::crc32;
 
 import tinf::inflate;
 
+// Compression methods
 alias CompressMethod = uint;
-const CompressMethod COMPRESS_METHOD_STORE   = 0;
-const CompressMethod COMPRESS_METHOD_DEFLATE = 8;
-const CompressMethod COMPRESS_METHOD_BZIP2   = 12; // TODO: unsupported
-const CompressMethod COMPRESS_METHOD_ZSTD    = 93; // TODO: unsupported
-const CompressMethod COMPRESS_METHOD_MP3     = 94; // TODO: unsupported
-const CompressMethod COMPRESS_METHOD_XZ      = 95; // TODO: unsupported
-const CompressMethod COMPRESS_METHOD_JPEG    = 96; // TODO: unsupported
-const CompressMethod COMPRESS_METHOD_AEX     = 99; // TODO: unsupported
+const CompressMethod ZIP_COMPRESS_STORE   = 0;
+const CompressMethod ZIP_COMPRESS_DEFLATE = 8;
+const CompressMethod ZIP_COMPRESS_BZIP2   = 12; // TODO: unsupported
+const CompressMethod ZIP_COMPRESS_ZSTD    = 93; // TODO: unsupported
+const CompressMethod ZIP_COMPRESS_MP3     = 94; // TODO: unsupported
+const CompressMethod ZIP_COMPRESS_XZ      = 95; // TODO: unsupported
+const CompressMethod ZIP_COMPRESS_JPEG    = 96; // TODO: unsupported
+const CompressMethod ZIP_COMPRESS_AEX     = 99; // TODO: unsupported
 
-const char[*] SIGNATURE_CENTRAL   = {0x50, 0x4b, 0x01, 0x02};
-const char[*] SIGNATURE_LOCAL     = {0x50, 0x4b, 0x03, 0x04};
-const char[*] SIGNATURE_END       = {0x50, 0x4b, 0x05, 0x06};
-const char[*] SIGNATURE_ZIP64_END = {0x50, 0x4b, 0x06, 0x06};
-const char[*] SIGNATURE_ZIP64_LOC = {0x50, 0x4b, 0x06, 0x07};
-const char[*] SIGNATURE_DESCR     = {0x50, 0x4b, 0x07, 0x08}; // optional
+// Signatures
+const char[*] ZIP_SIGNATURE_CENTRAL     = {0x50, 0x4b, 0x01, 0x02};
+const char[*] ZIP_SIGNATURE_LOCAL       = {0x50, 0x4b, 0x03, 0x04};
+const char[*] ZIP_SIGNATURE_END         = {0x50, 0x4b, 0x05, 0x06};
+const char[*] ZIP64_SIGNATURE_END       = {0x50, 0x4b, 0x06, 0x06};
+const char[*] ZIP64_SIGNATURE_LOCATOR   = {0x50, 0x4b, 0x06, 0x07};
+const char[*] ZIP_SIGNATURE_DATA        = {0x50, 0x4b, 0x07, 0x08}; // optional
+const char[*] ZIP_SIGNATURE_DIGITAL_SIG = {0x50, 0x4b, 0x05, 0x05};
 
 faultdef NOT_FOUND,
 	INVALID_END_RECORD,
@@ -139,7 +142,7 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 		offset = zip_file.central_header.rel_offset;
 		file.seek(offset, Seek.SET)!;
 		zip_file.local_header.parse(file, allocator)!;
-		if (zip_file.local_header.flag.use_descriptor)
+		if (zip_file.local_header.flag.streaming)
 		{
 			offset += zip_file.central_header.compress_size; // TODO: make a function that can handle zip64?
 			file.seek(offset, Seek.SET)!;
@@ -199,7 +202,7 @@ fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
 fn String? ZipFile.filename(&zf)
 {
 	// If language encoding flag is set, use filename directly
-	if (zf.central_header.flag.efs) return zf.central_header.filename;
+	if (zf.central_header.flag.language) return zf.central_header.filename;
 
 	// If a Unicode Path Extra field is present, use this
 	if (try data = find_extra_header(zf.central_header.extra, UNICODE_PATH_HEADER))
@@ -259,14 +262,14 @@ fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 
 	switch (zf.compression_method())
 	{
-	case COMPRESS_METHOD_STORE:
+	case ZIP_COMPRESS_STORE:
 		assert(zf.compressed_size() == zf.uncompressed_size(),
 			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
 
 		// Read all data from limit reader
 		io::read_all(&&zf.reader(file), dst)!;
 
-	case COMPRESS_METHOD_DEFLATE:
+	case ZIP_COMPRESS_DEFLATE:
 		assert(zf.compressed_size() != zf.uncompressed_size(),
 			"COMPRESS_METHOD_DEFLATE: uncompressed and compressed sizes match");
 
@@ -277,7 +280,7 @@ fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 		// Uncompress data
 		inflate::uncompress(dst, src)!;
 
-	case COMPRESS_METHOD_BZIP2:
+	case ZIP_COMPRESS_BZIP2:
 	default:
 		return UNSUPPORTED_COMPRESSION_METHOD?;
 	}
@@ -379,7 +382,7 @@ fn void? ZipEndRecord.parse(&r, InStream in, Allocator allocator = mem) => @pool
 
 	if (in.read(buf[..])! != 22) return INVALID_END_RECORD?;
 
-	if (buf[:4] != SIGNATURE_END[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != ZIP_SIGNATURE_END[:4]) return SIGNATURE_MISMATCH?;
 
 	r.magic_number   = read_le_32(buf[ 0:4]);
 	r.number_of_disk = read_le_16(buf[ 4:2]);
@@ -398,9 +401,11 @@ fn void? ZipEndRecord.parse(&r, InStream in, Allocator allocator = mem) => @pool
 *>
 bitstruct ZipFlag : ushort
 {
-	bool encrypted      :  0;	// indicates if file is encrypted
-	bool use_descriptor :  3;	// crc32, sizes are unset; use Data Descriptor
-	bool efs            : 11;	// language encoding flag
+	bool encrypted  :  0;	// indicates if file is encrypted
+	bool streaming  :  3;	// crc32, sizes are unset; use Data Descriptor
+	bool patched    :  5;	// indicates if file is encrypted
+	bool language   : 11;	// language encoding flag
+	bool enc_center : 13;	// encrypted central directory
 }
 
 <*
@@ -469,7 +474,7 @@ fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) 
 
 	if (in.read(buf[..])! != 46) return INVALID_CENTRAL_FILE_HEADER?;
 
-	if (buf[:4] != SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != ZIP_SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH?;
 
 	c.magic_number    = read_le_32(buf[ 0:4]);
 	c.version_used    = read_le_16(buf[ 4:2]);
@@ -545,7 +550,7 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 
 	if (in.read(buf[..])! != 30) return INVALID_LOCAL_FILE_HEADER?;
 
-	if (buf[:4] != SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != ZIP_SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
 
 	f.magic_number    = read_le_32(buf[ 0:4]);
 	f.version_min     = read_le_16(buf[ 4:2]);
@@ -683,7 +688,7 @@ fn usz? find_end_record(InStream in)
 		n = in.read(&buf)!;
 
 		// Scan for end record magic number
-		if (try loc = ((String)buf[:n]).index_of(SIGNATURE_END[:4]))
+		if (try loc = ((String)buf[:n]).index_of(ZIP_SIGNATURE_END[:4]))
 		{
 			return size - offset + loc;
 		}
