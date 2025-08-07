@@ -2,19 +2,25 @@ module archive::zip;
 
 import std::io;
 import std::collections::pair;
+import std::hash::crc32;
 
 import tinf::inflate;
 
-const uint COMPRESS_METHOD_STORE   = 0;
-const uint COMPRESS_METHOD_DEFLATE = 8;
-const uint COMPRESS_METHOD_BZIP2   = 12; // TODO: unsupported
+alias CompressMethod = uint;
+const CompressMethod COMPRESS_METHOD_STORE   = 0;
+const CompressMethod COMPRESS_METHOD_DEFLATE = 8;
+const CompressMethod COMPRESS_METHOD_BZIP2   = 12; // TODO: unsupported
 
 const char[*] MAGIC_NUMBER_END     = {0x50, 0x4b, 0x05, 0x06};
 const char[*] MAGIC_NUMBER_CENTRAL = {0x50, 0x4b, 0x01, 0x02};
 const char[*] MAGIC_NUMBER_LOCAL   = {0x50, 0x4b, 0x03, 0x04};
 
-faultdef NOT_FOUND, INVALID_END_RECORD, INVALID_CENTRAL_FILE_HEADER,
-	INVALID_LOCAL_FILE_HEADER, MAGIC_NUMBER_MISMATCH,
+faultdef NOT_FOUND,
+	INVALID_END_RECORD,
+	INVALID_CENTRAL_FILE_HEADER,
+	INVALID_LOCAL_FILE_HEADER,
+	INVALID_CRC32_HASH,
+	MAGIC_NUMBER_MISMATCH,
 	UNSUPPORTED_COMPRESSION_METHOD;
 
 alias ZipFile = Pair{ ZipCentralFileHeader, ZipLocalFileHeader };
@@ -93,45 +99,98 @@ fn ZipFile Zip.get(&z, usz index) @operator([])
 }
 
 <*
- Returns an InStream to read the compressed data for the given file.
- Don't close the returned InStream.
+ Filename
+
+ @require zf.first.filename == zf.second.filename : "Inconsistent filenames between Center and Local file headers"
 *>
-fn InStream? ZipFile.compressed_data(&zf, InStream file)
+fn String ZipFile.filename(&zf) => zf.first.filename;
+
+<*
+ Compressed Size (as it is stored in Zip archive).
+
+ @require zf.first.compress_size == zf.second.compress_size : "Inconsistent compressed size between Center and Local file headers"
+*>
+fn usz ZipFile.compressed_size(&zf) => (usz)zf.first.compress_size;
+
+<*
+ Uncompressed Size (after extraction and uncompression).
+
+ @require zf.first.uncompress_size == zf.second.uncompress_size : "Inconsistent size between Center and Local file headers"
+*>
+fn usz ZipFile.uncompressed_size(&zf) => (usz)zf.first.uncompress_size;
+
+<*
+ CRC32 of uncompressed data.
+
+ @require zf.first.crc32 == zf.second.crc32 : "Inconsistent crc32 between Center and Local file headers"
+*>
+fn uint ZipFile.crc32(&zf) => zf.first.crc32;
+
+<*
+ CRC32 of uncompressed data.
+
+ @require zf.first.compress_method == zf.second.compress_method : "Inconsistent compression method between Center and Local file headers"
+*>
+fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.first.compress_method;
+
+<*
+ Returns a LimitReader for the compressed (!) data of the ZipFile.
+ Do not close the LimitReader.
+ @param [in] file : "Zip archive file stream"
+*>
+fn LimitReader? ZipFile.reader(&zf, InStream file)
 {
 	ZipCentralFileHeader cf;
 	ZipLocalFileHeader lf;
-
 	zf.unpack(&cf, &lf);
 
 	uint loc = cf.rel_offset + 30 + lf.filename_len + lf.extra_len;
 	file.seek(loc, Seek.SET)!;
 
-	return (LimitReader){}.init(file, lf.compress_size);
+	return { file, lf.compress_size };
 }
 
 <*
  Decompress data and write it to OutStream out.
 *>
-fn usz? ZipFile.copy_to(&zf, InStream file, OutStream out)
+fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 {
-	switch (zf.first.compress_method)
+	uint hash;
+	char[] src, dst;
+
+	dst = mem::temp_array(char, zf.uncompressed_size());
+
+	switch (zf.compression_method())
 	{
-		case COMPRESS_METHOD_STORE:
-			return io::copy_to(zf.compressed_data(file), out);
-		case COMPRESS_METHOD_DEFLATE:
-			@pool() {
-				char[] src = mem::temp_array(char, zf.first.compress_size);
-				io::read_all(zf.compressed_data(file), src)!;
+	case COMPRESS_METHOD_STORE:
+		assert(zf.compressed_size() == zf.uncompressed_size(),
+			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
 
-				char[] dst = mem::temp_array(char, zf.first.uncompress_size);
-				inflate::uncompress(dst, src)!;
+		// Read all data from limit reader
+		io::read_all(&&zf.reader(file), dst)!;
 
-				return io::copy_to(&&io::wrap_bytes(dst), out);
-			};
-		case COMPRESS_METHOD_BZIP2:
-		default:
-			return UNSUPPORTED_COMPRESSION_METHOD?;
+	case COMPRESS_METHOD_DEFLATE:
+		assert(zf.compressed_size() != zf.uncompressed_size(),
+			"COMPRESS_METHOD_DEFLATE: uncompressed and compressed sizes match");
+
+		// Read all data from limit reader
+		src = mem::temp_array(char, zf.compressed_size());
+		io::read_all(&&zf.reader(file), src)!;
+
+		// Uncompress data
+		inflate::uncompress(dst, src)!;
+
+	case COMPRESS_METHOD_BZIP2:
+	default:
+		return UNSUPPORTED_COMPRESSION_METHOD?;
 	}
+
+	// Verify crc32 hash
+	hash = crc32::hash(dst);
+	if (hash != zf.crc32()) return INVALID_CRC32_HASH?;
+
+	// Write data
+	return io::write_all(writer, dst);
 }
 
 <*
