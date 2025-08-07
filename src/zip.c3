@@ -22,10 +22,12 @@ const CompressMethod COMPRESS_METHOD_XZ      = 95; // TODO: unsupported
 const CompressMethod COMPRESS_METHOD_JPEG    = 96; // TODO: unsupported
 const CompressMethod COMPRESS_METHOD_AEX     = 99; // TODO: unsupported
 
-const char[*] MAGIC_NUMBER_CENTRAL = {0x50, 0x4b, 0x01, 0x02};
-const char[*] MAGIC_NUMBER_LOCAL   = {0x50, 0x4b, 0x03, 0x04};
-const char[*] MAGIC_NUMBER_END     = {0x50, 0x4b, 0x05, 0x06};
-const char[*] MAGIC_NUMBER_DESCR   = {0x50, 0x4b, 0x07, 0x08}; // optional
+const char[*] SIGNATURE_CENTRAL   = {0x50, 0x4b, 0x01, 0x02};
+const char[*] SIGNATURE_LOCAL     = {0x50, 0x4b, 0x03, 0x04};
+const char[*] SIGNATURE_END       = {0x50, 0x4b, 0x05, 0x06};
+const char[*] SIGNATURE_ZIP64_END = {0x50, 0x4b, 0x06, 0x06};
+const char[*] SIGNATURE_ZIP64_LOC = {0x50, 0x4b, 0x06, 0x07};
+const char[*] SIGNATURE_DESCR     = {0x50, 0x4b, 0x07, 0x08}; // optional
 
 faultdef NOT_FOUND,
 	INVALID_END_RECORD,
@@ -33,7 +35,7 @@ faultdef NOT_FOUND,
 	INVALID_LOCAL_FILE_HEADER,
 	INVALID_DATA_DESCRIPTOR,
 	INVALID_CRC32_HASH,
-	MAGIC_NUMBER_MISMATCH,
+	SIGNATURE_MISMATCH,
 	UNSUPPORTED_COMPRESSION_METHOD,
 	UNSUPPORTED_ZIP64;
 
@@ -123,7 +125,7 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 	nrecords = z.record.tot_nr_records;
 	z.files = allocator::new_array(allocator, ZipFile, nrecords);
 
-	// Read central file headers
+	// Read central directory file headers
 	file.seek(z.record.rel_offset, Seek.SET)!;
 	foreach (&zip_file : z.files)
 	{
@@ -288,7 +290,53 @@ fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 }
 
 <*
- End of central directory record (EOCD)
+ Unused
+*>
+struct ZipDigitalSignature
+{
+	uint 	signature;
+	ushort  data_size;
+	char[]  data;
+}
+
+<*
+ ZIP64 End of Central Directory Record
+
+  Note that 'record_size' is the size in bytes of the "remaining" record (minus
+  leading 12 bytes), i.e.
+
+	 Size = SizeOfFixedFields + SizeOfVariableFields - 12
+
+*>
+struct Zip64EndRecord
+{
+	uint	  signature;
+	ulong 	  record_size;
+	ushort    version_made;
+	ushort    version_min;
+	uint      nr_disk;
+	uint      disk_start;
+	ulong     nr_records;
+	ulong     tot_nr_records;
+	ulong     size_bytes; 	  // size of central directory
+	ulong     rel_offset; 	  // relative to start of archive
+	char[]    data;           // zip64 extensible data sector (header: 2 bytes, len: 4 bytes, data[len] ..)
+	Allocator allocator;
+}
+
+<*
+ ZIP64 End of Central Directory Locator
+*>
+struct Zip64EndLocator
+{
+	uint  signature;
+	uint  disk_start;
+	ulong rel_offset;
+	uint  tot_disks;
+}
+
+<*
+ End of central directory record
 *>
 struct ZipEndRecord (Printable)
 {
@@ -331,7 +379,7 @@ fn void? ZipEndRecord.parse(&r, InStream in, Allocator allocator = mem) => @pool
 
 	if (in.read(buf[..])! != 22) return INVALID_END_RECORD?;
 
-	if (buf[:4] != MAGIC_NUMBER_END[:4]) return MAGIC_NUMBER_MISMATCH?;
+	if (buf[:4] != SIGNATURE_END[:4]) return SIGNATURE_MISMATCH?;
 
 	r.magic_number   = read_le_32(buf[ 0:4]);
 	r.number_of_disk = read_le_16(buf[ 4:2]);
@@ -356,7 +404,7 @@ bitstruct ZipFlag : ushort
 }
 
 <*
- Central directory file header (CDFH)
+ Central directory file header
 
   central file header signature   4 bytes  (0x02014b50)
   version made by                 2 bytes
@@ -421,7 +469,7 @@ fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) 
 
 	if (in.read(buf[..])! != 46) return INVALID_CENTRAL_FILE_HEADER?;
 
-	if (buf[:4] != MAGIC_NUMBER_CENTRAL[:4]) return MAGIC_NUMBER_MISMATCH?;
+	if (buf[:4] != SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH?;
 
 	c.magic_number    = read_le_32(buf[ 0:4]);
 	c.version_used    = read_le_16(buf[ 4:2]);
@@ -497,7 +545,7 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 
 	if (in.read(buf[..])! != 30) return INVALID_LOCAL_FILE_HEADER?;
 
-	if (buf[:4] != MAGIC_NUMBER_LOCAL[:4]) return MAGIC_NUMBER_MISMATCH?;
+	if (buf[:4] != SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
 
 	f.magic_number    = read_le_32(buf[ 0:4]);
 	f.version_min     = read_le_16(buf[ 4:2]);
@@ -635,7 +683,7 @@ fn usz? find_end_record(InStream in)
 		n = in.read(&buf)!;
 
 		// Scan for end record magic number
-		if (try loc = ((String)buf[:n]).index_of(MAGIC_NUMBER_END[:4]))
+		if (try loc = ((String)buf[:n]).index_of(SIGNATURE_END[:4]))
 		{
 			return size - offset + loc;
 		}
