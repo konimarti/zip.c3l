@@ -15,7 +15,7 @@ fn void test_read_end_records() => @pool()
 	InStream in = (ByteReader){}.init(file[..]);
 
 	// Find record
-	usz loc = zip::find_end_record(in)!!;
+	usz loc = zip::find_signature_r(in, zip::SIGNATURE_END)!!;
 	assert(loc == 1);
 
 	// Set file to the start of the eocd record

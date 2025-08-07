@@ -104,17 +104,24 @@ struct Zip64ExtraField
 
 fn void? Zip64ExtraField.parse(&f, char[] extra)
 {
-	if (extra.len < 32 ||
-		(extra.len >= 2 && read_le_16(extra[0:2]) != ZIP64_EXTRA_HEADER))
+	if (extra.len < 4 && (extra.len >= 2 && read_le_16(extra[0:2]) != ZIP64_EXTRA_HEADER))
 	{
 		return INVALID_ZIP64_EXTRA_FIELD?;
 	}
 
+	usz len = read_le_16(extra[2:2]);
+
 	f.header_id       = read_le_16(extra[ 0:2]);
 	f.data_size       = read_le_16(extra[ 2:2]);
 	f.uncompress_size = read_le_64(extra[ 4:8]);
+
+	if (len < 16) return;
 	f.compress_size   = read_le_64(extra[12:8]);
+
+	if (len < 24) return;
 	f.rel_offset      = read_le_64(extra[20:8]);
+
+	if (len < 32) return;
 	f.number          = read_le_32(extra[28:4]);
 }
 

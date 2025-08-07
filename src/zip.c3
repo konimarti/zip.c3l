@@ -14,23 +14,23 @@ import tinf::inflate;
 
 // Compression methods
 alias CompressMethod = uint;
-const CompressMethod ZIP_COMPRESS_STORE   = 0;
-const CompressMethod ZIP_COMPRESS_DEFLATE = 8;
-const CompressMethod ZIP_COMPRESS_BZIP2   = 12; // TODO: unsupported
-const CompressMethod ZIP_COMPRESS_ZSTD    = 93; // TODO: unsupported
-const CompressMethod ZIP_COMPRESS_MP3     = 94; // TODO: unsupported
-const CompressMethod ZIP_COMPRESS_XZ      = 95; // TODO: unsupported
-const CompressMethod ZIP_COMPRESS_JPEG    = 96; // TODO: unsupported
-const CompressMethod ZIP_COMPRESS_AEX     = 99; // TODO: unsupported
+const CompressMethod COMPRESS_STORE   = 0;
+const CompressMethod COMPRESS_DEFLATE = 8;
+const CompressMethod COMPRESS_BZIP2   = 12; // TODO: unsupported
+const CompressMethod COMPRESS_ZSTD    = 93; // TODO: unsupported
+const CompressMethod COMPRESS_MP3     = 94; // TODO: unsupported
+const CompressMethod COMPRESS_XZ      = 95; // TODO: unsupported
+const CompressMethod COMPRESS_JPEG    = 96; // TODO: unsupported
+const CompressMethod COMPRESS_AEX     = 99; // TODO: unsupported
 
 // Signatures
-const char[*] ZIP_SIGNATURE_CENTRAL     = {0x50, 0x4b, 0x01, 0x02};
-const char[*] ZIP_SIGNATURE_LOCAL       = {0x50, 0x4b, 0x03, 0x04};
-const char[*] ZIP_SIGNATURE_END         = {0x50, 0x4b, 0x05, 0x06};
-const char[*] ZIP64_SIGNATURE_END       = {0x50, 0x4b, 0x06, 0x06};
-const char[*] ZIP64_SIGNATURE_LOCATOR   = {0x50, 0x4b, 0x06, 0x07};
-const char[*] ZIP_SIGNATURE_DATA        = {0x50, 0x4b, 0x07, 0x08}; // optional
-const char[*] ZIP_SIGNATURE_DIGITAL_SIG = {0x50, 0x4b, 0x05, 0x05};
+const char[*] SIGNATURE_CENTRAL       = {0x50, 0x4b, 0x01, 0x02};
+const char[*] SIGNATURE_LOCAL         = {0x50, 0x4b, 0x03, 0x04};
+const char[*] SIGNATURE_END           = {0x50, 0x4b, 0x05, 0x06};
+const char[*] SIGNATURE_END_ZIP64     = {0x50, 0x4b, 0x06, 0x06};
+const char[*] SIGNATURE_LOCATOR_ZIP64 = {0x50, 0x4b, 0x06, 0x07};
+const char[*] SIGNATURE_DATA          = {0x50, 0x4b, 0x07, 0x08}; // optional
+const char[*] SIGNATURE_DIGITAL_SIG   = {0x50, 0x4b, 0x05, 0x05};
 
 faultdef NOT_FOUND,
 	INVALID_END_RECORD,
@@ -107,7 +107,16 @@ fn void? extract(InStream file, Path base_folder) => @pool()
 *>
 struct ZipMeta (Printable)
 {
-	ZipEndRecord record;
+	bool zip64;
+	union
+	{
+		struct z64
+		{
+			Zip64EndRecord  record;
+			Zip64EndLocator locator;
+		}
+		ZipEndRecord record;
+	}
 	ZipFile[]    files;
 	Allocator    allocator;
 }
@@ -115,38 +124,56 @@ struct ZipMeta (Printable)
 fn void? ZipMeta.tparse(&z, InStream file) => z.parse(file, tmem);
 fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 {
-	usz nrecords, end_record_loc;
-
-	end_record_loc = find_end_record(file)!;
-	file.seek(end_record_loc, Seek.SET)!;
+	usz nrecords, offset, end_record_loc;
 
 	z.allocator = allocator;
 	defer catch z.free();
 
+	end_record_loc = find_signature_r(file, SIGNATURE_END)!;
+	file.seek(end_record_loc, Seek.SET)!;
 	z.record.parse(file, allocator)!;
 
+	offset = z.record.rel_offset;
 	nrecords = z.record.tot_nr_records;
+
+	if (offset == 0xFF_FF_FF_FF || nrecords == 0xFF_FF)
+	{
+		z.zip64 = true;
+
+		// Find the Zip64 Locator
+		end_record_loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64)!;
+		file.seek(end_record_loc, Seek.SET)!;
+		z.z64.locator.parse(file)!;
+
+		// Parse Zip64 End Record
+		file.seek(z.z64.locator.rel_offset, Seek.SET)!;
+		z.z64.record.parse(file)!;
+
+		offset = z.z64.record.rel_offset;
+		nrecords = z.z64.record.tot_nr_records;
+	}
+
 	z.files = allocator::new_array(allocator, ZipFile, nrecords);
 
 	// Read central directory file headers
-	file.seek(z.record.rel_offset, Seek.SET)!;
+	file.seek(offset, Seek.SET)!;
 	foreach (&zip_file : z.files)
 	{
 		zip_file.central_header.parse(file, allocator)!;
 	}
 
+
 	// Read local file headers
-	usz offset;
 	foreach (&zip_file : z.files)
 	{
-		offset = zip_file.central_header.rel_offset;
+		offset = zip_file.offset()!;
 		file.seek(offset, Seek.SET)!;
 		zip_file.local_header.parse(file, allocator)!;
-		if (zip_file.local_header.flag.streaming)
+		if (zip_file.streaming())
 		{
-			offset += zip_file.central_header.compress_size; // TODO: make a function that can handle zip64?
+			offset += zip_file.compressed_size()!;
 			file.seek(offset, Seek.SET)!;
-			zip_file.data_descriptor.parse(file)!;
+			zip_file.data_descriptor.parse(file, z.zip64)!;
 		}
 	}
 }
@@ -169,7 +196,10 @@ fn usz? ZipMeta.to_format(&z, Formatter *f) @dynamic
 	return 0;
 }
 
-fn usz ZipMeta.len(&z) @operator(len) => z.record.tot_nr_records;
+fn usz ZipMeta.len(&z) @operator(len)
+{
+	return z.zip64 ? z.z64.record.tot_nr_records : z.record.tot_nr_records;
+}
 
 fn ZipFile ZipMeta.get(&z, usz index) @operator([]) => z.files[index];
 
@@ -217,14 +247,66 @@ fn String? ZipFile.filename(&zf)
 }
 
 <*
+ Offset to local file header
+*>
+fn ulong? ZipFile.offset(&zf)
+{
+	uint offset = zf.central_header.rel_offset;
+	if (offset == 0xFF_FF_FF_FF)
+	{
+		// Zip64
+		if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
+		{
+			Zip64ExtraField f;
+			f.parse(data)!;
+			return (ulong)f.rel_offset;
+		}
+	}
+	return (ulong)offset;
+}
+
+<*
  Compressed Size (as it is stored in Zip archive).
 *>
-fn ulong ZipFile.compressed_size(&zf) => (ulong)zf.central_header.compress_size;
+fn ulong? ZipFile.compressed_size(&zf)
+{
+	uint size = zf.central_header.compress_size;
+	if (size == 0xFF_FF_FF_FF)
+	{
+		// Zip64
+		if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
+		{
+			Zip64ExtraField f;
+			f.parse(data)!;
+			return (ulong)f.compress_size;
+		}
+	}
+	return (ulong)size;
+}
 
 <*
  Uncompressed Size (after extraction and uncompression).
 *>
-fn ulong ZipFile.uncompressed_size(&zf) => (ulong)zf.central_header.uncompress_size;
+fn ulong? ZipFile.uncompressed_size(&zf)
+{
+	uint size = zf.central_header.uncompress_size;
+	if (size == 0xFF_FF_FF_FF)
+	{
+		// Zip64
+		if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
+		{
+			Zip64ExtraField f;
+			f.parse(data)!;
+			return (ulong)f.uncompress_size;
+		}
+	}
+	return (ulong)size;
+}
+
+<*
+ Bit 3 of general-purpose flag
+*>
+fn bool ZipFile.streaming(&zf) => zf.central_header.flag.streaming;
 
 <*
  CRC32 of uncompressed data.
@@ -245,10 +327,10 @@ fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.central_header.comp
 *>
 fn LimitReader? ZipFile.reader(&zf, InStream file)
 {
-	uint loc = zf.central_header.rel_offset + 30 + zf.local_header.filename_len + zf.local_header.extra_len;
+	ulong loc = zf.offset()! + 30 + zf.local_header.filename_len + zf.local_header.extra_len;
 	file.seek(loc, Seek.SET)!;
 
-	return { file, zf.local_header.compress_size };
+	return { file, zf.compressed_size() };
 }
 
 <*
@@ -258,29 +340,29 @@ fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
 {
 	char[] src, dst;
 
-	dst = mem::temp_array(char, zf.uncompressed_size());
+	dst = mem::temp_array(char, zf.uncompressed_size()!);
 
 	switch (zf.compression_method())
 	{
-	case ZIP_COMPRESS_STORE:
-		assert(zf.compressed_size() == zf.uncompressed_size(),
+	case COMPRESS_STORE:
+		assert(zf.compressed_size()! == zf.uncompressed_size()!,
 			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
 
 		// Read all data from limit reader
 		io::read_all(&&zf.reader(file), dst)!;
 
-	case ZIP_COMPRESS_DEFLATE:
-		assert(zf.compressed_size() != zf.uncompressed_size(),
+	case COMPRESS_DEFLATE:
+		assert(zf.compressed_size()! != zf.uncompressed_size()!,
 			"COMPRESS_METHOD_DEFLATE: uncompressed and compressed sizes match");
 
 		// Read all data from limit reader
-		src = mem::temp_array(char, zf.compressed_size());
+		src = mem::temp_array(char, zf.compressed_size()!);
 		io::read_all(&&zf.reader(file), src)!;
 
 		// Uncompress data
 		inflate::uncompress(dst, src)!;
 
-	case ZIP_COMPRESS_BZIP2:
+	case COMPRESS_BZIP2:
 	default:
 		return UNSUPPORTED_COMPRESSION_METHOD?;
 	}
@@ -322,9 +404,29 @@ struct Zip64EndRecord
 	ulong     nr_records;
 	ulong     tot_nr_records;
 	ulong     size_bytes; 	  // size of central directory
-	ulong     rel_offset; 	  // relative to start of archive
-	char[]    data;           // zip64 extensible data sector (header: 2 bytes, len: 4 bytes, data[len] ..)
-	Allocator allocator;
+	ulong     rel_offset; 	  // offset to central directory (relative to start of archive)
+	// char[]    data;           // zip64 extensible data sector (header: 2 bytes, len: 4 bytes, data[len] ..)
+	// Allocator allocator;
+}
+
+fn void? Zip64EndRecord.parse(&r, InStream in)
+{
+	char[56] buf;
+
+	if (in.read(buf[..])! != 56) return INVALID_END_RECORD?;
+
+	if (buf[:4] != SIGNATURE_END_ZIP64[:4]) return SIGNATURE_MISMATCH?;
+
+	r.signature      = read_le_32(buf[ 0:4]);
+	r.record_size    = read_le_64(buf[ 4:8]);
+	r.version_made   = read_le_16(buf[12:2]);
+	r.version_min    = read_le_16(buf[14:2]);
+	r.nr_disk        = read_le_32(buf[16:4]);
+	r.disk_start     = read_le_32(buf[20:4]);
+	r.nr_records     = read_le_64(buf[24:8]);
+	r.tot_nr_records = read_le_64(buf[32:8]);
+	r.size_bytes     = read_le_64(buf[40:8]);
+	r.rel_offset     = read_le_64(buf[48:8]);
 }
 
 <*
@@ -334,8 +436,22 @@ struct Zip64EndLocator
 {
 	uint  signature;
 	uint  disk_start;
-	ulong rel_offset;
+	ulong rel_offset; // offset to Zip64EndRecord (relative to start of file)
 	uint  tot_disks;
+}
+
+fn void? Zip64EndLocator.parse(&r, InStream in)
+{
+	char[20] buf;
+
+	if (in.read(buf[..])! != 20) return INVALID_END_RECORD?;
+
+	if (buf[:4] != SIGNATURE_LOCATOR_ZIP64[:4]) return SIGNATURE_MISMATCH?;
+
+	r.signature      = read_le_32(buf[ 0:4]);
+	r.disk_start     = read_le_32(buf[ 4:4]);
+	r.rel_offset     = read_le_64(buf[ 8:8]);
+	r.tot_disks      = read_le_32(buf[16:4]);
 }
 
 <*
@@ -343,7 +459,7 @@ struct Zip64EndLocator
 *>
 struct ZipEndRecord (Printable)
 {
-	uint	  magic_number;
+	uint	  signature;
 	ushort 	  number_of_disk;
 	ushort    disk_start;
 	ushort    nr_records;
@@ -365,7 +481,7 @@ fn void ZipEndRecord.free(&self)
 fn usz? ZipEndRecord.to_format(&self, Formatter *f) @dynamic
 {
 	usz n;
-	n += f.printf("magic num : %x\n", self.magic_number)!;
+	n += f.printf("magic num : %x\n", self.signature)!;
 	n += f.printf("records   : %d\n", self.nr_records)!;
 	n += f.printf("total     : %d\n", self.tot_nr_records)!;
 	n += f.printf("size      : %d\n", self.size_bytes)!;
@@ -382,9 +498,9 @@ fn void? ZipEndRecord.parse(&r, InStream in, Allocator allocator = mem) => @pool
 
 	if (in.read(buf[..])! != 22) return INVALID_END_RECORD?;
 
-	if (buf[:4] != ZIP_SIGNATURE_END[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_END[:4]) return SIGNATURE_MISMATCH?;
 
-	r.magic_number   = read_le_32(buf[ 0:4]);
+	r.signature   = read_le_32(buf[ 0:4]);
 	r.number_of_disk = read_le_16(buf[ 4:2]);
 	r.disk_start     = read_le_16(buf[ 6:2]);
 	r.nr_records     = read_le_16(buf[ 8:2]);
@@ -436,7 +552,7 @@ bitstruct ZipFlag : ushort
 *>
 struct ZipCentralFileHeader
 {
-	uint      magic_number;
+	uint      signature;
 	ushort    version_used;
 	ushort    version_min;
 	ZipFlag   flag;
@@ -474,9 +590,9 @@ fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) 
 
 	if (in.read(buf[..])! != 46) return INVALID_CENTRAL_FILE_HEADER?;
 
-	if (buf[:4] != ZIP_SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH?;
 
-	c.magic_number    = read_le_32(buf[ 0:4]);
+	c.signature    = read_le_32(buf[ 0:4]);
 	c.version_used    = read_le_16(buf[ 4:2]);
 	c.version_min     = read_le_16(buf[ 6:2]);
 	c.flag            = (ZipFlag)read_le_16(buf[ 8:2]);
@@ -520,7 +636,7 @@ fn void? ZipCentralFileHeader.parse(&c, InStream in, Allocator allocator = mem) 
 *>
 struct ZipLocalFileHeader
 {
-	uint      magic_number;
+	uint      signature;
 	ushort    version_min;
 	ZipFlag   flag;
 	ushort    compress_method;
@@ -550,9 +666,9 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 
 	if (in.read(buf[..])! != 30) return INVALID_LOCAL_FILE_HEADER?;
 
-	if (buf[:4] != ZIP_SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
 
-	f.magic_number    = read_le_32(buf[ 0:4]);
+	f.signature    = read_le_32(buf[ 0:4]);
 	f.version_min     = read_le_16(buf[ 4:2]);
 	f.flag            = (ZipFlag)read_le_16(buf[ 6:2]);
 	f.compress_method = read_le_16(buf[ 8:2]);
@@ -670,9 +786,9 @@ fn ulong read_le_64(char[] p) @inline @private
 
 
 <*
- Scan from the end of the file for the end of central directory (EOCD) record
+ Scan from the end of the file for signature.
 *>
-fn usz? find_end_record(InStream in)
+fn usz? find_signature_r(InStream in, char[4] sig)
 {
 	usz i, n, size, offset;
 	char[256] buf;
@@ -688,7 +804,7 @@ fn usz? find_end_record(InStream in)
 		n = in.read(&buf)!;
 
 		// Scan for end record magic number
-		if (try loc = ((String)buf[:n]).index_of(ZIP_SIGNATURE_END[:4]))
+		if (try loc = ((String)buf[:n]).index_of((String)sig[..]))
 		{
 			return size - offset + loc;
 		}
