@@ -340,10 +340,10 @@ struct ZipFile
 	ushort    compress_method;
 	ZipTime   time;
 	ZipDate   date;
-	uint      crc32;		// maybe from DataDescriptor
-	ulong     compress_size;	// ulong? maybe from DataDescriptor / maybe from Zip64 extra
-	ulong     uncompress_size; 	// ulong? maybe from DataDescriptor / maybe from Zip64 extra
-	String    filename;		// maybe from extra (dep on flags)
+	uint      crc32;
+	ulong     compress_size;
+	ulong     uncompress_size;
+	String    filename;
 	String    extra;
 
 	// Data from Central Directory Header
@@ -352,8 +352,6 @@ struct ZipFile
 	uint      external_attr;
 	ulong     rel_offset; 		// offset to begin of Local File Header
 	ulong     file_offset; 		// offset to beginn of compressed file data
-
-	bool zip64; // true if in ZIP64 format
 
 	Allocator allocator;
 }

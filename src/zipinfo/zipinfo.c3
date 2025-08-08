@@ -34,7 +34,7 @@ fn void show_zip_info(String filename) => @pool()
 		io::printfn("\n*** filename : %s", zip_file.filename);
 		io::printfn("    date time: %s %s", zip_file.date, zip_file.time);
 		io::printn("+++");
-		zip_file.write_to(io::stdout(), &f)!!;
+		// zip_file.write_to(io::stdout(), &f)!!;
 		io::printn("---");
 	}
 
