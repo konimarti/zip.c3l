@@ -9,6 +9,7 @@ module archive::zip;
 
 import std::io;
 import std::hash::crc32;
+import std::collections::list;
 
 import tinf::inflate;
 
@@ -107,7 +108,10 @@ fn void? extract(InStream file, Path base_folder) => @pool()
 *>
 struct ZipMeta (Printable)
 {
+	// Indicate Zip format (zip64 if true)
 	bool zip64;
+
+	// End records are mainly used for parsing the zip file
 	union
 	{
 		struct z64
@@ -117,9 +121,14 @@ struct ZipMeta (Printable)
 		}
 		ZipEndRecord record;
 	}
+
+	// Relevant file information is stored here
 	ZipFile[]    files;
+
 	Allocator    allocator;
 }
+
+alias ZipFileList = List { ZipFile };
 
 fn void? ZipMeta.tparse(&z, InStream file) => z.parse(file, tmem);
 fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
@@ -129,7 +138,43 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 	z.allocator = allocator;
 	defer catch z.free();
 
-	end_record_loc = find_signature_r(file, SIGNATURE_END)!;
+	if (try loc = find_signature_r(file, SIGNATURE_END))
+	{
+		end_record_loc = loc;
+	}
+	else
+	{
+		// Fallback: End Record not found, scan for Local File Header
+		ZipFileList list;
+		list.init(allocator);
+
+		file.seek(0, Seek.SET)!;
+		while (try loc = find_next_signature(file, SIGNATURE_LOCAL))
+		{
+			ZipFile zip_file;
+
+			file.seek(loc, Seek.SET)!;
+			zip_file.local_header.parse(file, allocator)!;
+
+			// Hack together an (incomplete) Central Directory File header
+			zip_file.central_header.filename = zip_file.local_header.filename.copy(allocator);
+			zip_file.central_header.filename_len = zip_file.local_header.filename_len;
+			zip_file.central_header.extra = zip_file.local_header.extra.copy(allocator);
+			zip_file.central_header.extra_len = zip_file.local_header.extra_len;
+			zip_file.central_header.compress_size = zip_file.local_header.compress_size;
+			zip_file.central_header.uncompress_size = zip_file.local_header.uncompress_size;
+			zip_file.central_header.compress_method = zip_file.local_header.compress_method;
+			zip_file.central_header.crc32 = zip_file.local_header.crc32;
+			zip_file.central_header.rel_offset = (uint)loc;
+
+			list.push(zip_file);
+		}
+
+		z.files = list.array_view();
+
+		return;
+	}
+
 	file.seek(end_record_loc, Seek.SET)!;
 	z.record.parse(file, allocator)!;
 
@@ -161,7 +206,6 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 	{
 		zip_file.central_header.parse(file, allocator)!;
 	}
-
 
 	// Read local file headers
 	foreach (&zip_file : z.files)
@@ -196,10 +240,7 @@ fn usz? ZipMeta.to_format(&z, Formatter *f) @dynamic
 	return 0;
 }
 
-fn usz ZipMeta.len(&z) @operator(len)
-{
-	return z.zip64 ? z.z64.record.tot_nr_records : z.record.tot_nr_records;
-}
+fn usz ZipMeta.len(&z) @operator(len) => z.files.len;
 
 fn ZipFile ZipMeta.get(&z, usz index) @operator([]) => z.files[index];
 
@@ -847,6 +888,28 @@ fn usz? find_signature_r(InStream in, char[4] sig)
 		if (try loc = ((String)buf[:n]).index_of((String)sig[..]))
 		{
 			return size - offset + loc;
+		}
+	}
+
+	return NOT_FOUND?;
+}
+
+<*
+ Scan from the current file cursor for a signature.
+*>
+fn usz? find_next_signature(InStream in, char[4] sig)
+{
+	usz n;
+	char[256] buf;
+
+	while (try read = in.read(&buf) && read > 0)
+	{
+		n += read;
+
+		// Scan for Signature
+		if (try loc = ((String)buf[:read]).index_of((String)sig[..]))
+		{
+			return in.seek(0,Seek.CURSOR)! - read + loc;
 		}
 	}
 
