@@ -108,7 +108,7 @@ fn void? extract(Path base_folder, InStream file) => @pool()
 
 		// Extract file
 		File save = file::open(path.str_view(), "w")!;
-		zip_file.write_to(&save, file)!;
+		zip_file.extract_to(&save, file)!;
 		save.close()!;
 	}
 }
@@ -446,7 +446,7 @@ fn LimitReader? ZipFile.reader(&zf, InStream file)
 }
 
 <*
- Write the (decompressed) data to the OutStream writer.
+ Extract and Write the (decompressed) data to the OutStream writer.
 
  The CRC32 checksum of the decompressed data is calculated and compared to the
  stored checksum.
@@ -455,7 +455,7 @@ fn LimitReader? ZipFile.reader(&zf, InStream file)
  @param file   : "Zip Archive stream"
  @return "Number of (decompressed) bytes written to writer"
 *>
-fn usz? ZipFile.write_to(&zf, OutStream writer, InStream file, bool *checksum = null) => @pool()
+fn usz? ZipFile.extract_to(&zf, OutStream writer, InStream file, bool *checksum = null) => @pool()
 {
 	char[] src, dst;
 
@@ -787,7 +787,7 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 
 	if (buf[:4] != SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
 
-	f.signature    = read_le_32(buf[ 0:4]);
+	f.signature       = read_le_32(buf[ 0:4]);
 	f.version_min     = read_le_16(buf[ 4:2]);
 	f.flag            = (ZipFlag)read_le_16(buf[ 6:2]);
 	f.compress_method = read_le_16(buf[ 8:2]);
@@ -897,7 +897,6 @@ fn ulong read_le_64(char[] p) @inline @private
 		((ulong) p[6] << 48) |
 		((ulong) p[7] << 56);
 }
-
 
 <*
  Scan from the end of the file for signature.
