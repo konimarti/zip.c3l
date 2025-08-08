@@ -31,8 +31,11 @@ fn void show_zip_info(String filename) => @pool()
 	// Print content of files.
 	foreach (zip_file : z)
 	{
-		io::printfn("\n*** filename: %s", zip_file.filename);
-		// zip_file.write_to(io::stdout(), &f)!!;
+		io::printfn("\n*** filename : %s", zip_file.filename);
+		io::printfn("    date time: %s %s", zip_file.date, zip_file.time);
+		io::printn("+++");
+		zip_file.write_to(io::stdout(), &f)!!;
+		io::printn("---");
 	}
 
 	// archive::zip::ls

@@ -226,15 +226,25 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 		lh.parse(file, allocator)!;
 		if (ch.flag.streaming)
 		{
-			unreachable(" -- BOOM --");
-			// FIXME: this part needs to be rewritten:
-			// when we stream, we dont have the compress_size available.
-			// What we need to do is scan for the next local header file.
-			// and use the central directory offset as a guide when we reach EOF.
-			// the data descriptor is then "read" backwards from
-			// the next locator or the central directory offset
-			// file.seek(lh.compress_size, Seek.CURSOR)!;
-			// dd.parse(file, z.zip64)!;
+			// When we are streaming, we dont have the
+			// compress_size available. What we need to do is scan
+			// for the next local header file and use the central
+			// directory offset as a guide when we reach EOF. The
+			// data descriptor is then "read" backwards from the
+			// next locator or the central directory offset.
+			if (try loc = find_next_signature(file, SIGNATURE_LOCAL))
+			{
+				file.seek(z.zip64 ? -20 : -12, Seek.CURSOR)!;
+				dd.parse(file, z.zip64)!;
+			}
+			else
+			{
+				// `find_next_signature` threw pobably an EOF
+				// error; so we assume we are looking at the
+				// last file that ends with central directory.
+				file.seek(z.zip64 ? (ulong)z.z64.record.rel_offset - 20 : (ulong)z.record.rel_offset - 12, Seek.SET)!;
+			}
+			dd.parse(file, z.zip64)!;
 		}
 
 		zip_file.init(allocator, ch, lh, dd)!;
@@ -263,6 +273,61 @@ fn usz ZipMeta.len(&z) @operator(len) => z.files.len;
 
 fn ZipFile ZipMeta.get(&z, usz index) @operator([]) => z.files[index];
 
+<*
+ ZipTime is in the MS-DOS format and is a 16-bit packed value representing the
+ time of the day.
+
+  	Bits   0-4: Seconds divided by 2 (0-29)
+  	Bits  5-10: Minutes (0-59)
+  	Bits 11-15: Hours (0-23)
+
+*>
+struct ZipTime (Printable)
+{
+	union
+	{
+		bitstruct : ushort
+		{
+			char halfsec : 0 .. 4;
+			char minutes : 5 .. 10;
+			char hours   : 11 .. 15;
+		}
+		ushort last_mod_time;
+	}
+}
+
+fn usz? ZipTime.to_format(&self, Formatter *f) @dynamic
+{
+	return f.printf("%02d:%02d:%02d", self.hours, self.minutes, self.halfsec * 2);
+}
+
+<*
+ ZipDate is in the MS-DOS format which is a 16-bit packed value that specifies
+ the day, month, and year.
+
+  	Bits  0-4: Day of the month (0 - 31)
+  	Bits  5-8: Month (1=Jan, 2=Feb, and so on)
+  	Bits 9-15: Year offset from 1980 (add 1980 to get actual year)
+
+*>
+struct ZipDate (Printable)
+{
+	union
+	{
+		bitstruct : ushort
+		{
+			char day   : 0 .. 4;
+			char month : 5 .. 8;
+			char year  : 9 .. 15;
+		}
+		ushort last_mod_date;
+	}
+}
+
+fn usz? ZipDate.to_format(&self, Formatter *f) @dynamic
+{
+	return f.printf("%04d-%02d-%02d", self.year + 1980, self.month, self.day);
+}
 
 <*
  ZipFile contains the metadata for a file entry in the zip archive.
@@ -273,8 +338,8 @@ struct ZipFile
 	ushort    version_min;
 	ZipFlag   flag;
 	ushort    compress_method;
-	ushort    last_mod_time;
-	ushort    last_mod_date;
+	ZipTime   time;
+	ZipDate   date;
 	uint      crc32;		// maybe from DataDescriptor
 	ulong     compress_size;	// ulong? maybe from DataDescriptor / maybe from Zip64 extra
 	ulong     uncompress_size; 	// ulong? maybe from DataDescriptor / maybe from Zip64 extra
@@ -299,8 +364,8 @@ fn void? ZipFile.init(&zf, Allocator allocator, ZipCentralFileHeader cfh, ZipLoc
 	zf.version_min      = lfh.version_min;
 	zf.flag             = lfh.flag;
 	zf.compress_method  = lfh.compress_method;
-	zf.last_mod_time    = lfh.last_mod_time;
-	zf.last_mod_date    = lfh.last_mod_date;
+	zf.time.last_mod_time = lfh.last_mod_time;
+	zf.date.last_mod_date = lfh.last_mod_date;
 	zf.crc32            = lfh.crc32;
 	zf.compress_size    = lfh.compress_size;
 	zf.uncompress_size  = lfh.uncompress_size;
@@ -757,6 +822,7 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 *>
 struct ZipDataDescriptor
 {
+	// signature is optional
 	uint crc32;
 	ulong compress_size; 	// make it ZIP64 ready with ulong
 	ulong uncompress_size;  // make it ZIP64 ready with ulong
