@@ -96,7 +96,7 @@ fn void test_zip_archive() => @pool()
 {
 	InStream f = (ByteReader){}.init(zip_data[..]);
 	ZipMeta z;
-	z.parse(f, tmem)!!;
+	z.tparse(f)!!;
 	assert(z.len() == 6);
 }
 

@@ -76,11 +76,11 @@ fn PathList? ls(Allocator allocator, InStream file) => @pool()
 }
 
 <*
- Extracts the files to the folder
+ Extracts the files to the provided folder
 
  @require path::is_dir(base_folder) : "Folder must be a directory"
 *>
-fn void? extract(InStream file, Path base_folder) => @pool()
+fn void? extract(Path base_folder, InStream file) => @pool()
 {
 	ZipMeta z;
 	z.tparse(file)!;
@@ -108,7 +108,7 @@ fn void? extract(InStream file, Path base_folder) => @pool()
 
 		// Extract file
 		File save = file::open(path.str_view(), "w")!;
-		zip_file.copy_to(file, &save)!;
+		zip_file.write_to(&save, file)!;
 		save.close()!;
 	}
 }
@@ -426,9 +426,16 @@ fn LimitReader? ZipFile.reader(&zf, InStream file)
 }
 
 <*
- Decompress data and write it to OutStream out.
+ Write the (decompressed) data to the OutStream writer.
+
+ The CRC32 checksum of the decompressed data is calculated and compared to the
+ stored checksum.
+
+ @param writer : "Write decompressed data to writer"
+ @param file   : "Zip Archive stream"
+ @return "Number of (decompressed) bytes written to writer"
 *>
-fn usz? ZipFile.copy_to(&zf, InStream file, OutStream writer) => @pool()
+fn usz? ZipFile.write_to(&zf, OutStream writer, InStream file) => @pool()
 {
 	char[] src, dst;
 

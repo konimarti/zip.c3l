@@ -32,7 +32,7 @@ fn void show_zip_info(String filename) => @pool()
 	foreach (zip_file : z)
 	{
 		io::printfn("\n*** filename: %s", zip_file.filename()!!);
-		zip_file.copy_to(&f, io::stdout())!!;
+		zip_file.write_to(io::stdout(), &f)!!;
 	}
 
 	// archive::zip::ls
@@ -41,5 +41,5 @@ fn void show_zip_info(String filename) => @pool()
 
 	// archive::zip::extract
 	Path folder = path::temp("/tmp/")!!;
-	zip::extract(&f, folder)!!;
+	zip::extract(folder, &f)!!;
 }
