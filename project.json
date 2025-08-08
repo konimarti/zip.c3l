@@ -13,6 +13,10 @@
 		"zipinfo": {
 			"type": "executable",
 			"sources": [ "src/zipinfo/*" ]
+		},
+		"zippack": {
+			"type": "executable",
+			"sources": [ "src/zippack/*" ]
 		}
 	}
 }
