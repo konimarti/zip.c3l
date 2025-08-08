@@ -34,7 +34,7 @@ fn void show_zip_info(String filename) => @pool()
 		io::printfn("\n*** filename : %s", zip_file.filename);
 		io::printfn("    date time: %s %s", zip_file.date, zip_file.time);
 		io::printn("+++");
-		// zip_file.write_to(io::stdout(), &f)!!;
+		zip_file.extract_to(io::stdout(), &f)!!;
 		io::printn("---");
 	}
 
@@ -44,6 +44,6 @@ fn void show_zip_info(String filename) => @pool()
 
 	// archive::zip::extract
 	// Path folder = path::temp("/tmp/")!!;
-	Path folder = path::temp("/home/km/test/")!!;
-	zip::extract(folder, &f)!!;
+	// Path folder = path::temp("/home/km/test/")!!;
+	// zip::extract(folder, &f)!!;
 }
