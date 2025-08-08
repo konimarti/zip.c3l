@@ -68,7 +68,7 @@ fn PathList? ls(Allocator allocator, InStream file) => @pool()
 
 	foreach (zip_file : z)
 	{
-		String path_str = path::normalize(zip_file.filename(), PathEnv.POSIX)!;
+		String path_str = path::normalize(zip_file.filename, PathEnv.POSIX)!;
 		Path path = path::new(allocator, path_str)!!;
 		list.push(path);
 	}
@@ -91,11 +91,11 @@ fn void? extract(Path base_folder, InStream file) => @pool()
 
 	foreach (zip_file : z)
 	{
-		filename = zip_file.filename()!;
+		filename = zip_file.filename;
 		is_directory = filename.ends_with("/");
 
 		// Normalize path from UNIX sep to whatever is used
-		path_str = path::normalize(zip_file.filename(), PathEnv.POSIX)!;
+		path_str = path::normalize(filename, PathEnv.POSIX)!;
 		path = base_folder.tappend(path_str)!;
 
 		// Build directory structure
@@ -139,12 +139,14 @@ struct ZipMeta (Printable)
 	Allocator    allocator;
 }
 
-alias ZipFileList = List { ZipFile };
-
 fn void? ZipMeta.tparse(&z, InStream file) => z.parse(tmem, file);
 fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 {
-	usz nrecords, offset, end_record_loc;
+	usz nrecords, offset, directory_offset, end_record_loc;
+
+	ZipLocalFileHeader lh;
+	ZipCentralFileHeader ch;
+	ZipDataDescriptor dd;
 
 	z.allocator = allocator;
 	defer catch z.free();
@@ -156,28 +158,29 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 	else
 	{
 		// Fallback: End Record not found, scan for Local File Header
-		ZipFileList list;
+		List {ZipFile} list;
 		list.init(allocator);
 
 		file.seek(0, Seek.SET)!;
 		while (try loc = find_next_signature(file, SIGNATURE_LOCAL))
 		{
-			ZipFile zip_file;
 
 			file.seek(loc, Seek.SET)!;
-			zip_file.local_header.parse(file, allocator)!;
+			lh.parse(file, allocator)!;
 
 			// Hack together an (incomplete) Central Directory File header
-			zip_file.central_header.filename = zip_file.local_header.filename.copy(allocator);
-			zip_file.central_header.filename_len = zip_file.local_header.filename_len;
-			zip_file.central_header.extra = zip_file.local_header.extra.copy(allocator);
-			zip_file.central_header.extra_len = zip_file.local_header.extra_len;
-			zip_file.central_header.compress_size = zip_file.local_header.compress_size;
-			zip_file.central_header.uncompress_size = zip_file.local_header.uncompress_size;
-			zip_file.central_header.compress_method = zip_file.local_header.compress_method;
-			zip_file.central_header.crc32 = zip_file.local_header.crc32;
-			zip_file.central_header.rel_offset = (uint)loc;
+			ch.filename = lh.filename.copy(allocator);
+			ch.filename_len = lh.filename_len;
+			ch.extra = lh.extra.copy(allocator);
+			ch.extra_len = lh.extra_len;
+			ch.compress_size = lh.compress_size;
+			ch.uncompress_size = lh.uncompress_size;
+			ch.compress_method = lh.compress_method;
+			ch.crc32 = lh.crc32;
+			ch.rel_offset = (uint)loc;
 
+			ZipFile zip_file;
+			zip_file.init(allocator, ch, lh)!;
 			list.push(zip_file);
 		}
 
@@ -192,10 +195,10 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 	offset = z.record.rel_offset;
 	nrecords = z.record.tot_nr_records;
 
-	if (offset == 0xFF_FF_FF_FF || nrecords == 0xFF_FF)
-	{
-		z.zip64 = true;
+	z.zip64 = offset == 0xFF_FF_FF_FF || nrecords == 0xFF_FF;
 
+	if (z.zip64)
+	{
 		// Find the Zip64 Locator
 		end_record_loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64)!;
 		file.seek(end_record_loc, Seek.SET)!;
@@ -211,25 +214,30 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 
 	z.files = allocator::new_array(allocator, ZipFile, nrecords);
 
-	// Read central directory file headers
-	file.seek(offset, Seek.SET)!;
+	// Read file headers
 	foreach (&zip_file : z.files)
 	{
-		zip_file.central_header.parse(file, allocator)!;
-	}
-
-	// Read local file headers
-	foreach (&zip_file : z.files)
-	{
-		offset = zip_file.local_offset()!;
 		file.seek(offset, Seek.SET)!;
-		zip_file.local_header.parse(file, allocator)!;
-		if (zip_file.streaming())
+		ch.parse(file, allocator)!;
+		offset = file.seek(0, Seek.CURSOR)!;
+
+		file.seek(ch.rel_offset, Seek.SET)!;
+
+		lh.parse(file, allocator)!;
+		if (ch.flag.streaming)
 		{
-			offset += zip_file.compressed_size()!;
-			file.seek(offset, Seek.SET)!;
-			zip_file.data_descriptor.parse(file, z.zip64)!;
+			unreachable(" -- BOOM --");
+			// FIXME: this part needs to be rewritten:
+			// when we stream, we dont have the compress_size available.
+			// What we need to do is scan for the next local header file.
+			// and use the central directory offset as a guide when we reach EOF.
+			// the data descriptor is then "read" backwards from
+			// the next locator or the central directory offset
+			// file.seek(lh.compress_size, Seek.CURSOR)!;
+			// dd.parse(file, z.zip64)!;
 		}
+
+		zip_file.init(allocator, ch, lh, dd)!;
 	}
 }
 
@@ -261,156 +269,107 @@ fn ZipFile ZipMeta.get(&z, usz index) @operator([]) => z.files[index];
 *>
 struct ZipFile
 {
-	ZipCentralFileHeader central_header;
-	ZipLocalFileHeader   local_header;
-	ZipDataDescriptor    data_descriptor;
+	// Data from Local File Header
+	ushort    version_min;
+	ZipFlag   flag;
+	ushort    compress_method;
+	ushort    last_mod_time;
+	ushort    last_mod_date;
+	uint      crc32;		// maybe from DataDescriptor
+	ulong     compress_size;	// ulong? maybe from DataDescriptor / maybe from Zip64 extra
+	ulong     uncompress_size; 	// ulong? maybe from DataDescriptor / maybe from Zip64 extra
+	String    filename;		// maybe from extra (dep on flags)
+	String    extra;
+
+	// Data from Central Directory Header
+	ushort    version_used ;
+	ushort    internal_attr;
+	uint      external_attr;
+	ulong     rel_offset; 		// offset to begin of Local File Header
+	ulong     file_offset; 		// offset to beginn of compressed file data
+
+	bool zip64; // true if in ZIP64 format
+
+	Allocator allocator;
+}
+
+fn void? ZipFile.init(&zf, Allocator allocator, ZipCentralFileHeader cfh, ZipLocalFileHeader lfh, ZipDataDescriptor desc = {})
+{
+	// Data from Local File Header
+	zf.version_min      = lfh.version_min;
+	zf.flag             = lfh.flag;
+	zf.compress_method  = lfh.compress_method;
+	zf.last_mod_time    = lfh.last_mod_time;
+	zf.last_mod_date    = lfh.last_mod_date;
+	zf.crc32            = lfh.crc32;
+	zf.compress_size    = lfh.compress_size;
+	zf.uncompress_size  = lfh.uncompress_size;
+	zf.extra            = lfh.extra.copy(allocator);
+
+	// Obtain filename
+	if (zf.flag.language)
+	{
+		zf.filename = lfh.filename.copy(allocator);;
+	}
+	else if (try block = find_extra_header(zf.extra, UNICODE_PATH_HEADER))
+	{
+		UnicodePathExtraField ex;
+		ex.parse(block)!;
+		zf.filename = ex.filename.copy(allocator);
+	}
+	else
+	{
+		zf.filename = lfh.filename.copy(allocator);
+	}
+
+	// Data from Central Directory Header
+	zf.version_used  = cfh.version_used;
+	zf.internal_attr = cfh.internal_attr;
+	zf.external_attr = cfh.external_attr;
+	zf.rel_offset    = cfh.rel_offset;
+	zf.file_offset   = (ulong)cfh.rel_offset + 30 + lfh.filename_len + lfh.extra_len;
+
+	// ZIP64: check for ZIP64 values  and replace that by extensible field
+	if (zf.uncompress_size == 0xFF_FF_FF_FF || zf.compress_size == 0xFF_FF_FF_FF || zf.rel_offset == 0xFF_FF_FF_FF)
+	{
+		if (try block = find_extra_header(zf.extra, ZIP64_EXTRA_HEADER))
+		{
+			Zip64ExtraField ex;
+			ex.parse(block)!;
+			if (zf.compress_size   == 0xFF_FF_FF_FF) zf.compress_size   = ex.compress_size;
+			if (zf.uncompress_size == 0xFF_FF_FF_FF) zf.uncompress_size = ex.uncompress_size;
+			if (zf.rel_offset      == 0xFF_FF_FF_FF) zf.rel_offset      = ex.rel_offset;
+		}
+	}
+
+	// Data from Data Descriptor (if needed)
+	if (zf.flag.streaming)
+	{
+		zf.crc32           = desc.crc32;
+		zf.compress_size   = desc.compress_size;
+		zf.uncompress_size = desc.uncompress_size;
+	}
+
+	zf.allocator = allocator;
 }
 
 fn void ZipFile.free(&self)
 {
-	self.central_header.free();
-	self.local_header.free();
+	if (!self.allocator) return;
+	self.filename.free(self.allocator);
+	self.extra.free(self.allocator);
 }
 
 fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
 {
 	return f.printf("%-40s %-12d %-12d %-12d\n",
-			zf.filename(), zf.compressed_size(), zf.uncompressed_size(), zf.compression_method());
-}
-
-<*
- Filename with forward slash ('/') as separator according to 4.4.16 of the spec.
-*>
-fn String? ZipFile.filename(&zf)
-{
-	// If language encoding flag is set, use filename directly
-	if (zf.central_header.flag.language) return zf.central_header.filename;
-
-	// If a Unicode Path Extra field is present, use this
-	return @zip_extra_get("filename", zf.central_header, UnicodePathExtraField, UNICODE_PATH_HEADER);
-}
-
-// TODO: This contract fails, but should it?
-//@require types::is_same($typeof($ExtraType.$eval(#field)), $typeof(central_header.$eval(#field))) : "Field type mismatch"
-<*
-*>
-macro @zip_extra_get(#field, central_header, $ExtraType, ushort header_id)
-{
-	// Extract Zip64 from extra data
-	if (try data = find_extra_header(central_header.$eval("extra"), header_id))
-	{
-		$ExtraType f;
-		f.parse(data)!;
-		return f.$eval(#field);
-	}
-	else
-	{
-		return central_header.$eval(#field);
-	}
-}
-
-<*
- Extract a specific field from the char[] extra block of a Central Directory Header.
-
- @require $defined($ExtraType.$eval(#field)) : "Types is missing #field"
- @require $defined(central_header.$eval(#field)) : "Central Header Type is missing #field"
- @require $defined(central_header.$eval("extra")) : "Central Header Type is missing 'char[] extra' field"
-*>
-macro @zip_extra_ulong(#field, central_header, $ExtraType, ushort header_id)
-{
-	ulong size = (ulong)central_header.$eval(#field);
-
-	$switch $sizeof(central_header.$eval(#field)):
-	$case 4: if (size != 0xFF_FF_FF_FF) return size;
-	$case 2: if (size != 0xFF_FF) return size;
-	$default: $error("unsupported field size");
-	$endswitch
-
-	// Extract Zip64 from extra data
-	return (ulong)@zip_extra_get(#field, central_header, $ExtraType, header_id);
-}
-
-macro @zip64_extra(#field, central_header) => @zip_extra_ulong(#field, central_header, Zip64ExtraField, ZIP64_EXTRA_HEADER);
-
-<*
- Offset to local file header
-*>
-fn ulong? ZipFile.local_offset(&zf)
-{
-	return @zip64_extra("rel_offset", zf.central_header);
-	// TODO: Remove below after Zip64 verification
-	// uint offset = zf.central_header.rel_offset;
-	// if (offset == 0xFF_FF_FF_FF)
-	// {
-	// 	// Zip64
-	// 	if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
-	// 	{
-	// 		Zip64ExtraField f;
-	// 		f.parse(data)!;
-	// 		return (ulong)f.rel_offset;
-	// 	}
-	// }
-	// return (ulong)offset;
-}
-
-<*
- Compressed Size (as it is stored in Zip archive).
-*>
-fn ulong? ZipFile.compressed_size(&zf)
-{
-	return @zip64_extra("compress_size", zf.central_header);
-	// TODO: Remove below after Zip64 verification
-	// uint size = zf.central_header.compress_size;
-	// if (size == 0xFF_FF_FF_FF)
-	// {
-		// Zip64
-		// if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
-		// {
-		// 	Zip64ExtraField f;
-		// 	f.parse(data)!;
-		// 	return (ulong)f.compress_size;
-		// }
-	// }
-	// return (ulong)size;
-}
-
-<*
- Uncompressed Size (after extraction and uncompression).
-*>
-fn ulong? ZipFile.uncompressed_size(&zf)
-{
-	return @zip64_extra("uncompress_size", zf.central_header);
-	// TODO: Remove below after Zip64 verification
-	// uint size = zf.central_header.uncompress_size;
-	// if (size == 0xFF_FF_FF_FF)
-	// {
-	// 	// Zip64
-	// 	if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
-	// 	{
-	// 		Zip64ExtraField f;
-	// 		f.parse(data)!;
-	// 		return (ulong)f.uncompress_size;
-	// 	}
-	// }
-	// return (ulong)size;
+			zf.filename, zf.compress_size, zf.uncompress_size, zf.compress_method);
 }
 
 <*
  Bit 3 of general-purpose flag
 *>
-fn bool ZipFile.streaming(&zf) => zf.central_header.flag.streaming;
-
-<*
- CRC32 of uncompressed data.
-*>
-fn uint ZipFile.crc32(&zf) => zf.central_header.crc32;
-
-<*
- CRC32 of uncompressed data.
-
- @require zf.central_header.compress_method == zf.local_header.compress_method : "Inconsistent compression method between Center and Local file headers"
-*>
-fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.central_header.compress_method;
+fn bool ZipFile.streaming(&zf) => zf.flag.streaming;
 
 <*
  Returns a LimitReader for the compressed (!) data of the ZipFile.
@@ -419,10 +378,8 @@ fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.central_header.comp
 *>
 fn LimitReader? ZipFile.reader(&zf, InStream file)
 {
-	ulong loc = zf.local_offset()! + 30 + zf.local_header.filename_len + zf.local_header.extra_len;
-	file.seek(loc, Seek.SET)!;
-
-	return { file, zf.compressed_size() };
+	file.seek(zf.file_offset, Seek.SET)!;
+	return { file, zf.compress_size };
 }
 
 <*
@@ -435,27 +392,27 @@ fn LimitReader? ZipFile.reader(&zf, InStream file)
  @param file   : "Zip Archive stream"
  @return "Number of (decompressed) bytes written to writer"
 *>
-fn usz? ZipFile.write_to(&zf, OutStream writer, InStream file) => @pool()
+fn usz? ZipFile.write_to(&zf, OutStream writer, InStream file, bool *checksum = null) => @pool()
 {
 	char[] src, dst;
 
-	dst = mem::temp_array(char, zf.uncompressed_size()!);
+	dst = mem::temp_array(char, zf.uncompress_size);
 
-	switch (zf.compression_method())
+	switch (zf.compress_method)
 	{
 	case COMPRESS_STORE:
-		assert(zf.compressed_size()! == zf.uncompressed_size()!,
+		assert(zf.compress_size == zf.uncompress_size,
 			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
 
 		// Read all data from limit reader
 		io::read_all(&&zf.reader(file), dst)!;
 
 	case COMPRESS_DEFLATE:
-		assert(zf.compressed_size()! != zf.uncompressed_size()!,
-			"COMPRESS_METHOD_DEFLATE: uncompressed and compressed sizes match");
+		assert(zf.compress_size != zf.uncompress_size,
+			"COMPRESS_METHOD_DEFLATE: compressed is larger than uncompressed size?");
 
 		// Read all data from limit reader
-		src = mem::temp_array(char, zf.compressed_size()!);
+		src = mem::temp_array(char, zf.compress_size);
 		io::read_all(&&zf.reader(file), src)!;
 
 		// Uncompress data
@@ -466,8 +423,8 @@ fn usz? ZipFile.write_to(&zf, OutStream writer, InStream file) => @pool()
 		return UNSUPPORTED_COMPRESSION_METHOD?;
 	}
 
-	// Verify crc32 hash
-	if (crc32::hash(dst) != zf.crc32()) return INVALID_CRC32_HASH?;
+	// Verify checksum
+	if (checksum) *checksum = crc32::hash(dst) == zf.crc32;
 
 	// Write data
 	return io::write_all(writer, dst);
@@ -801,14 +758,8 @@ fn void? ZipLocalFileHeader.parse(&f, InStream in, Allocator allocator = mem) =>
 struct ZipDataDescriptor
 {
 	uint crc32;
-	union {
-		uint compress_size;
-		ulong compress_size_zip64;
-	}
-	union {
-		uint uncompress_size;
-		ulong uncompress_size_zip64;
-	}
+	ulong compress_size; 	// make it ZIP64 ready with ulong
+	ulong uncompress_size;  // make it ZIP64 ready with ulong
 }
 
 fn void? ZipDataDescriptor.parse(&d, InStream in, bool zip64 = false)
@@ -826,8 +777,8 @@ fn void? ZipDataDescriptor.parse(&d, InStream in, bool zip64 = false)
 	}
 	else
 	{
-		d.compress_size_zip64   = read_le_64(buf[ 4:8]);
-		d.uncompress_size_zip64 = read_le_64(buf[12:8]);
+		d.compress_size   = read_le_64(buf[ 4:8]);
+		d.uncompress_size = read_le_64(buf[12:8]);
 	}
 }
 
