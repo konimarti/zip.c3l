@@ -166,7 +166,7 @@ fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
 	// Read local file headers
 	foreach (&zip_file : z.files)
 	{
-		offset = zip_file.offset()!;
+		offset = zip_file.local_offset()!;
 		file.seek(offset, Seek.SET)!;
 		zip_file.local_header.parse(file, allocator)!;
 		if (zip_file.streaming())
@@ -235,34 +235,70 @@ fn String? ZipFile.filename(&zf)
 	if (zf.central_header.flag.language) return zf.central_header.filename;
 
 	// If a Unicode Path Extra field is present, use this
-	if (try data = find_extra_header(zf.central_header.extra, UNICODE_PATH_HEADER))
-	{
-		UnicodePathExtraField path;
-		path.parse(data)!;
-		return (String)path.unicode;
-	}
-
-	// Otherwise, just use what we have
-	return zf.central_header.filename;
+	return @zip_extra_get("filename", zf.central_header, UnicodePathExtraField, UNICODE_PATH_HEADER);
 }
+
+// TODO: This contract fails, but should it?
+//@require types::is_same($typeof($ExtraType.$eval(#field)), $typeof(central_header.$eval(#field))) : "Field type mismatch"
+<*
+*>
+macro @zip_extra_get(#field, central_header, $ExtraType, ushort header_id)
+{
+	// Extract Zip64 from extra data
+	if (try data = find_extra_header(central_header.$eval("extra"), header_id))
+	{
+		$ExtraType f;
+		f.parse(data)!;
+		return f.$eval(#field);
+	}
+	else
+	{
+		return central_header.$eval(#field);
+	}
+}
+
+<*
+ Extract a specific field from the char[] extra block of a Central Directory Header.
+
+ @require $defined($ExtraType.$eval(#field)) : "Types is missing #field"
+ @require $defined(central_header.$eval(#field)) : "Central Header Type is missing #field"
+ @require $defined(central_header.$eval("extra")) : "Central Header Type is missing 'char[] extra' field"
+*>
+macro @zip_extra_ulong(#field, central_header, $ExtraType, ushort header_id)
+{
+	ulong size = (ulong)central_header.$eval(#field);
+
+	$switch $sizeof(central_header.$eval(#field)):
+	$case 4: if (size != 0xFF_FF_FF_FF) return size;
+	$case 2: if (size != 0xFF_FF) return size;
+	$default: $error("unsupported field size");
+	$endswitch
+
+	// Extract Zip64 from extra data
+	return (ulong)@zip_extra_get(#field, central_header, $ExtraType, header_id);
+}
+
+macro @zip64_extra(#field, central_header) => @zip_extra_ulong(#field, central_header, Zip64ExtraField, ZIP64_EXTRA_HEADER);
 
 <*
  Offset to local file header
 *>
-fn ulong? ZipFile.offset(&zf)
+fn ulong? ZipFile.local_offset(&zf)
 {
-	uint offset = zf.central_header.rel_offset;
-	if (offset == 0xFF_FF_FF_FF)
-	{
-		// Zip64
-		if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
-		{
-			Zip64ExtraField f;
-			f.parse(data)!;
-			return (ulong)f.rel_offset;
-		}
-	}
-	return (ulong)offset;
+	return @zip64_extra("rel_offset", zf.central_header);
+	// TODO: Remove below after Zip64 verification
+	// uint offset = zf.central_header.rel_offset;
+	// if (offset == 0xFF_FF_FF_FF)
+	// {
+	// 	// Zip64
+	// 	if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
+	// 	{
+	// 		Zip64ExtraField f;
+	// 		f.parse(data)!;
+	// 		return (ulong)f.rel_offset;
+	// 	}
+	// }
+	// return (ulong)offset;
 }
 
 <*
@@ -270,18 +306,20 @@ fn ulong? ZipFile.offset(&zf)
 *>
 fn ulong? ZipFile.compressed_size(&zf)
 {
-	uint size = zf.central_header.compress_size;
-	if (size == 0xFF_FF_FF_FF)
-	{
+	return @zip64_extra("compress_size", zf.central_header);
+	// TODO: Remove below after Zip64 verification
+	// uint size = zf.central_header.compress_size;
+	// if (size == 0xFF_FF_FF_FF)
+	// {
 		// Zip64
-		if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
-		{
-			Zip64ExtraField f;
-			f.parse(data)!;
-			return (ulong)f.compress_size;
-		}
-	}
-	return (ulong)size;
+		// if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
+		// {
+		// 	Zip64ExtraField f;
+		// 	f.parse(data)!;
+		// 	return (ulong)f.compress_size;
+		// }
+	// }
+	// return (ulong)size;
 }
 
 <*
@@ -289,18 +327,20 @@ fn ulong? ZipFile.compressed_size(&zf)
 *>
 fn ulong? ZipFile.uncompressed_size(&zf)
 {
-	uint size = zf.central_header.uncompress_size;
-	if (size == 0xFF_FF_FF_FF)
-	{
-		// Zip64
-		if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
-		{
-			Zip64ExtraField f;
-			f.parse(data)!;
-			return (ulong)f.uncompress_size;
-		}
-	}
-	return (ulong)size;
+	return @zip64_extra("uncompress_size", zf.central_header);
+	// TODO: Remove below after Zip64 verification
+	// uint size = zf.central_header.uncompress_size;
+	// if (size == 0xFF_FF_FF_FF)
+	// {
+	// 	// Zip64
+	// 	if (try data = find_extra_header(zf.central_header.extra, ZIP64_EXTRA_HEADER))
+	// 	{
+	// 		Zip64ExtraField f;
+	// 		f.parse(data)!;
+	// 		return (ulong)f.uncompress_size;
+	// 	}
+	// }
+	// return (ulong)size;
 }
 
 <*
@@ -327,7 +367,7 @@ fn CompressMethod ZipFile.compression_method(&zf) => (usz)zf.central_header.comp
 *>
 fn LimitReader? ZipFile.reader(&zf, InStream file)
 {
-	ulong loc = zf.offset()! + 30 + zf.local_header.filename_len + zf.local_header.extra_len;
+	ulong loc = zf.local_offset()! + 30 + zf.local_header.filename_len + zf.local_header.extra_len;
 	file.seek(loc, Seek.SET)!;
 
 	return { file, zf.compressed_size() };

@@ -145,7 +145,7 @@ struct UnicodePathExtraField
 	ushort data_size; 	// size of "extra" block
         char   version;
 	uint   crc32;	        // file name checksum
-	char[] unicode;
+	String filename; 	// UnicodeName
 }
 
 fn void? UnicodePathExtraField.parse(&f, char[] extra)
@@ -160,7 +160,7 @@ fn void? UnicodePathExtraField.parse(&f, char[] extra)
 	f.data_size = read_le_16(extra[2:2]);
 	f.version   =            extra[4];
 	f.crc32     = read_le_32(extra[5:4]);
-	f.unicode   =            extra[9..];
+	f.filename  =    (String)extra[9..];
 
-	if (crc32::hash(f.unicode) != f.crc32) return INVALID_CRC32_HASH?;
+	if (crc32::hash(f.filename) != f.crc32) return INVALID_CRC32_HASH?;
 }
