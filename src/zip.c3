@@ -44,6 +44,17 @@ faultdef NOT_FOUND,
 	UNSUPPORTED_ZIP64;
 
 <*
+ Read a zip archive and return its metadata
+*>
+fn ZipMeta? read(Allocator allocator, InStream file)
+{
+	ZipMeta z;
+	z.parse(allocator, file)!;
+	return z;
+}
+fn ZipMeta? tread(InStream file) => read(tmem, file);
+
+<*
  ls lists the filenames in the ZIP archive.
 *>
 fn PathList? ls(Allocator allocator, InStream file) => @pool()
@@ -130,8 +141,8 @@ struct ZipMeta (Printable)
 
 alias ZipFileList = List { ZipFile };
 
-fn void? ZipMeta.tparse(&z, InStream file) => z.parse(file, tmem);
-fn void? ZipMeta.parse(&z, InStream file, Allocator allocator)
+fn void? ZipMeta.tparse(&z, InStream file) => z.parse(tmem, file);
+fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 {
 	usz nrecords, offset, end_record_loc;
 

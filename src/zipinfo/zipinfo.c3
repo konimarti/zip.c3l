@@ -22,8 +22,7 @@ fn void show_zip_info(String filename) => @pool()
 
 	io::printfn("\n=== zip archive: %s", filename);
 
-	ZipMeta z;
-	z.parse(&f, tmem)!!;
+	ZipMeta z = zip::tread(&f)!!;
 
 	// Print file info (filename, compressed and uncompressed sizes, compression)
 	io::printfn("%-40s %-12s %-12s %-12s", "Filename", "Comp. Size", "Size", "Compression");
@@ -41,6 +40,6 @@ fn void show_zip_info(String filename) => @pool()
 	io::printn(list);
 
 	// archive::zip::extract
-	// Path folder = path::temp("/tmp/")!!;
-	// zip::extract(&f, folder)!!;
+	Path folder = path::temp("/tmp/")!!;
+	zip::extract(&f, folder)!!;
 }
