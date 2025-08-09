@@ -5,9 +5,33 @@ import std::collections::list;
 import std::hash::crc32;
 
 <*
+ Wrapped OutStream to provide number of written bytes.
+*>
+struct ZipOutStream (OutStream)
+{
+	OutStream w;
+	ulong written;
+}
+
+fn ulong ZipOutStream.tell(&self) => self.written;
+
+fn usz? ZipOutStream.write(&self,  char[] bytes) @dynamic
+{
+	usz? n = self.w.write(bytes);
+	if (try n) self.written += n;
+	return n;
+}
+
+fn void? ZipOutStream.write_byte(&self, char c) @dynamic
+{
+	if (catch err = self.w.write_byte(c)) return err?;
+	self.written++;
+}
+
+<*
  Write a file or folder into a zip archive.
 *>
-fn void? write(String path, File* writer) => @pool()
+fn void? write(String path, OutStream writer) => @pool()
 {
 	ZipWriter p = (ZipWriter){}.init(tmem, path, writer)!;
 
@@ -17,13 +41,13 @@ fn void? write(String path, File* writer) => @pool()
 
 	 // Now we need to create the central directory.
 	io::printn("writing central directory: start");
-	usz offset_directory = writer.seek(0, Seek.CURSOR)!;
+	usz offset_directory = p.writer.tell();
 	foreach (entry : p.entries) entry.write_central_directory_header(writer)!;
 	io::printn("writing central directory: done");
 
 	 // And finally the End of Directory Record
 	io::printn("writing end record: start");
-	p.write_end_record(writer, offset_directory)!;
+	p.write_end_record(offset_directory)!;
 	io::printn("writing end record: done");
 }
 
@@ -32,16 +56,16 @@ alias ZipEntryList = List { ZipEntry };
 struct ZipWriter
 {
 	Path         base_path;
-	File*        writer;
+	ZipOutStream writer;
 	ZipEntryList entries;
 	Allocator    allocator;
 }
 
-fn ZipWriter? ZipWriter.init(&p, Allocator allocator, String path, File* writer)
+fn ZipWriter? ZipWriter.init(&p, Allocator allocator, String path, OutStream writer)
 {
 	p.allocator = allocator;
 	p.base_path = path::new(allocator, path)!;
-	p.writer    = writer;
+	p.writer    = (ZipOutStream){ writer, 0 };
 
 	p.entries.init(allocator);
 
@@ -116,14 +140,14 @@ fn bool? zip_packer(Path path, bool is_dir, void* arg) => @pool()
 	z.compress_size   = is_dir ? 0 : content.len;
 	z.uncompress_size = is_dir ? 0 : content.len;
 	z.filename        = p.filename(p.allocator, path);
-	z.rel_offset      = p.writer.seek(0, Seek.CURSOR)!; 		// offset to begin of Local File Header
+	z.rel_offset      = p.writer.tell(); 		// offset to begin of Local File Header
 
 	io::printn("\n\nZipEntry created:");
 	io::printn(z);
 
 	// Write
 	io::printn("writing local header: start");
-	z.write_local_file_header(p.writer)!;
+	z.write_local_file_header(&p.writer)!;
 	io::printn("writing local header: done");
 
 	// Only write content if it is not a directory and if there is data.
@@ -144,7 +168,7 @@ fn bool? zip_packer(Path path, bool is_dir, void* arg) => @pool()
 	return false;
 }
 
-fn void? ZipEntry.write_local_file_header(&z, File* writer)
+fn void? ZipEntry.write_local_file_header(&z, OutStream writer)
 {
 	 write_le_32(writer, read_le_32(SIGNATURE_LOCAL[:4]))!;
 	 write_le_16(writer, (ushort)z.version_min    )!;
@@ -162,7 +186,7 @@ fn void? ZipEntry.write_local_file_header(&z, File* writer)
 	 if (z.extra.len) writer.write(z.extra)!;
 }
 
-fn void? ZipEntry.write_central_directory_header(&z, File* writer)
+fn void? ZipEntry.write_central_directory_header(&z, OutStream writer)
 {
 	 write_le_32(writer, read_le_32(SIGNATURE_CENTRAL[:4]))!;
 	 write_le_16(writer, (ushort)z.version_used    )!;
@@ -186,9 +210,10 @@ fn void? ZipEntry.write_central_directory_header(&z, File* writer)
 	 if (z.extra.len) writer.write(z.extra)!;
 }
 
-fn void? ZipWriter.write_end_record(&p, File* writer, usz offset)
+fn void? ZipWriter.write_end_record(&p, usz offset)
 {
-	 usz size_directory = writer.seek(0, Seek.CURSOR)! - offset;
+	OutStream writer = &p.writer;
+	 usz size_directory = p.writer.tell() - offset;
 	 write_le_32(writer, read_le_32(SIGNATURE_END[:4]))!;
 	 write_le_16(writer, 0                )!;
 	 write_le_16(writer, 0                )!;
