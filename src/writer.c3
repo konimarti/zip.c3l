@@ -7,18 +7,18 @@ import std::hash::crc32;
 <*
  Write a file or folder into a zip archive.
 *>
-fn void? write(Path base, File* writer) => @pool()
+fn void? write(String path, File* writer) => @pool()
 {
-	ZipWriter p = (ZipWriter){}.init(tmem, base, writer);
+	ZipWriter p = (ZipWriter){}.init(tmem, path, writer)!;
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record
-	 base.walk(&packer, &p)!;
+	path::temp(path).walk(&zip_packer, &p)!;
 
 	 // Now we need to create the central directory.
 	io::printn("writing central directory: start");
 	usz offset_directory = writer.seek(0, Seek.CURSOR)!;
-	foreach (z : p.entries) z.write_central_directory_header(writer)!;
+	foreach (entry : p.entries) entry.write_central_directory_header(writer)!;
 	io::printn("writing central directory: done");
 
 	 // And finally the End of Directory Record
@@ -37,10 +37,10 @@ struct ZipWriter
 	Allocator    allocator;
 }
 
-fn ZipWriter ZipWriter.init(&p, Allocator allocator, Path base, File* writer)
+fn ZipWriter? ZipWriter.init(&p, Allocator allocator, String path, File* writer)
 {
 	p.allocator = allocator;
-	p.base_path = base;
+	p.base_path = path::new(allocator, path)!;
 	p.writer    = writer;
 
 	p.entries.init(allocator);
@@ -49,9 +49,9 @@ fn ZipWriter ZipWriter.init(&p, Allocator allocator, Path base, File* writer)
 }
 
 <*
- Returns zip-compatible filename.
+ Returns zip-compatible filename. Called from `zip_packer()`.
 *>
-fn String ZipWriter.filename(&p, Allocator allocator, Path path) => @pool()
+fn String ZipWriter.filename(&p, Allocator allocator, Path path) @local => @pool()
 {
 	String base = p.base_path.absolute(tmem)!!.str_view();
 	String name = path.str_view().strip(base).tcopy();
@@ -87,13 +87,15 @@ fn String ZipWriter.filename(&p, Allocator allocator, Path path) => @pool()
 	return tmp.copy_str(allocator);
 }
 
-fn void ZipWriter.free(&p)
+fn void ZipWriter.free(&w)
 {
-	foreach (f : p.entries) f.free();
-	p.entries.free();
+	foreach (entry : w.entries) entry.free();
+	w.base_path.free();
+	w.entries.free();
+	*w = {};
 }
 
-fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
+fn bool? zip_packer(Path path, bool is_dir, void* arg) => @pool()
 {
 	defer catch io::printn("leaving packer");
 	io::printfn("entering packer for file: %s", path.str_view());
