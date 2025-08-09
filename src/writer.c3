@@ -9,7 +9,7 @@ import std::hash::crc32;
 *>
 fn void? pack(Allocator allocator, Path base, File* writer)
 {
-	Packer p = (Packer){}.init(allocator, base, writer);
+	ZipWriter p = (ZipWriter){}.init(allocator, base, writer);
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipFile record
@@ -17,64 +17,69 @@ fn void? pack(Allocator allocator, Path base, File* writer)
 
 	 // Now we need to create the central directory.
 	io::printn("writing central directory: start");
-	 usz offset_directory = writer.seek(0, Seek.CURSOR)!;
-	 foreach (z : p.files) z.write_central_directory_header(writer)!;
+	usz offset_directory = writer.seek(0, Seek.CURSOR)!;
+	foreach (z : p.files) z.write_central_directory_header(writer)!;
 	io::printn("writing central directory: done");
 
 	 // And finally the End of Directory Record
 	io::printn("writing end record: start");
-	 p.write_end_record(writer, offset_directory)!;
+	p.write_end_record(writer, offset_directory)!;
 	io::printn("writing end record: done");
 }
 fn void? tpack(Path base, File* writer) => pack(tmem, base, writer);
 
 alias ZipFileList = List { ZipFile };
 
-struct Packer
+struct ZipWriter
 {
-	Path        base;
-	String      prefix;
-	File*   writer;
+	Path        base_path;
+	File*       writer;
 	ZipFileList files;
 	Allocator   allocator;
 }
 
-fn Packer Packer.init(&p, Allocator allocator, Path base, File* writer)
+fn ZipWriter ZipWriter.init(&p, Allocator allocator, Path base, File* writer)
 {
 	p.allocator = allocator;
-	p.base   = base;
-	p.writer = writer;
+	p.base_path = base;
+	p.writer    = writer;
+
 	p.files.init(allocator);
+
 	return *p;
 }
 
 <*
  Returns zip-compatible filename.
 *>
-fn String Packer.filename(&p, Allocator allocator, Path path) => @pool()
+fn String ZipWriter.filename(&p, Allocator allocator, Path path) => @pool()
 {
-	String base = p.base.absolute(tmem)!!.str_view();
+	String base = p.base_path.absolute(tmem)!!.str_view();
 	String name = path.str_view().strip(base).tcopy();
+	DString tmp = dstring::temp("");
 
+	// Convert Win32 paths to forward slash path according to zip spec.
 	foreach (&c : name)
 	{
+		// TODO: Do we need to handle escaped separators?
 		if (path::is_win32_separator(*c))
 		{
 			*c = path::PREFERRED_SEPARATOR_POSIX;
 		}
 	}
 
-	DString tmp = dstring::temp("");
-
-	if (path::is_dir(p.base))
+	// Append prefix path
+	if (path::is_dir(p.base_path))
 	{
-		String top = p.base.basename().trim("/");
+		String top = p.base_path.basename().trim("/");
 		tmp.append_chars(top);
 		tmp.append_char('/');
 	}
 
+	// Append filename path (rebased from base_path)
 	tmp.append_chars(name.trim_left("/"));
 
+	// Append path separator if directory
 	if (path::is_dir(path) && !tmp.str_view().ends_with("/"))
 	{
 		tmp.append_char('/');
@@ -83,7 +88,7 @@ fn String Packer.filename(&p, Allocator allocator, Path path) => @pool()
 	return tmp.copy_str(allocator);
 }
 
-fn void Packer.free(&p)
+fn void ZipWriter.free(&p)
 {
 	foreach (f : p.files) f.free();
 	p.files.free();
@@ -94,19 +99,21 @@ fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
 	defer catch io::printn("leaving packer");
 	io::printfn("entering packer for file: %s", path.str_view());
 
-	Packer *p = (Packer*)arg;
+	if (!arg) return true; // Stop directory walk
 
-	// Get data
+	ZipWriter *p = (ZipWriter*)arg;
+
+	// Get file content
 	io::printn("before load");
-	char[] data = is_dir ? {} : file::load_path(mem, path)!;
+	char[] content = is_dir ? {} : file::load_path(mem, path)!;
 	io::printn("after load");
 
 	// Hack an uncompressed zip file together
 	ZipFile z;
 	z.flag.language   = true;
-	z.crc32 	  = crc32::hash(data); // crc32 should be done on the compressed data, but we do a shortcut here.
-	z.compress_size   = is_dir ? 0 : data.len;
-	z.uncompress_size = is_dir ? 0 : data.len;
+	z.crc32 	  = crc32::hash(content); // crc32 should be done on the compressed data, but we do a shortcut here.
+	z.compress_size   = is_dir ? 0 : content.len;
+	z.uncompress_size = is_dir ? 0 : content.len;
 	z.filename        = p.filename(p.allocator, path);
 	z.rel_offset      = p.writer.seek(0, Seek.CURSOR)!; 		// offset to begin of Local File Header
 
@@ -118,19 +125,22 @@ fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
 	z.write_local_file_header(p.writer)!;
 	io::printn("writing local header: done");
 
-
-	if (!is_dir)
+	// Only write content if it is not a directory and if there is data.
+	if (!is_dir || content.len > 0)
 	{
 		io::printn("writing data: start");
-		p.writer.write(data)!; // TODO: should be the compressed data
+		p.writer.write(content)!; // TODO: should be the compressed data
 		io::printn("writing data: done");
 	}
 
-	allocator::free(mem, data.ptr);
+	// Release content mem
+	if (!is_dir) allocator::free(mem, content.ptr);
 
-	p.files.push(z); // We need it for the central directory
+	// Store ZipEntry since We need it for the central directory
+	p.files.push(z);
 
-	return false; // return true when we want to stop
+	// Continue to the next file/directory recusrively
+	return false;
 }
 
 fn void? ZipFile.write_local_file_header(&z, File* writer)
@@ -175,7 +185,7 @@ fn void? ZipFile.write_central_directory_header(&z, File* writer)
 	 if (z.extra.len) writer.write(z.extra)!;
 }
 
-fn void? Packer.write_end_record(&p, File* writer, usz offset)
+fn void? ZipWriter.write_end_record(&p, File* writer, usz offset)
 {
 	 usz size_directory = writer.seek(0, Seek.CURSOR)! - offset;
 	 write_le_32(writer, read_le_32(SIGNATURE_END[:4]))!;
