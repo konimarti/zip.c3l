@@ -14,24 +14,25 @@ import std::collections::list;
 import tinf::inflate;
 
 // Compression methods
-alias CompressMethod = uint;
-const CompressMethod COMPRESS_STORE   = 0;
-const CompressMethod COMPRESS_DEFLATE = 8;
-const CompressMethod COMPRESS_BZIP2   = 12; // TODO: unsupported
-const CompressMethod COMPRESS_ZSTD    = 93; // TODO: unsupported
-const CompressMethod COMPRESS_MP3     = 94; // TODO: unsupported
-const CompressMethod COMPRESS_XZ      = 95; // TODO: unsupported
-const CompressMethod COMPRESS_JPEG    = 96; // TODO: unsupported
-const CompressMethod COMPRESS_AEX     = 99; // TODO: unsupported
+alias ZipCompressMethod = uint;
+const ZipCompressMethod COMPRESS_STORE   = 0;
+const ZipCompressMethod COMPRESS_DEFLATE = 8;
+const ZipCompressMethod COMPRESS_BZIP2   = 12; // TODO: unsupported
+const ZipCompressMethod COMPRESS_ZSTD    = 93; // TODO: unsupported
+const ZipCompressMethod COMPRESS_MP3     = 94; // TODO: unsupported
+const ZipCompressMethod COMPRESS_XZ      = 95; // TODO: unsupported
+const ZipCompressMethod COMPRESS_JPEG    = 96; // TODO: unsupported
+const ZipCompressMethod COMPRESS_AEX     = 99; // TODO: unsupported
 
 // Signatures
-const char[*] SIGNATURE_CENTRAL       = {0x50, 0x4b, 0x01, 0x02};
-const char[*] SIGNATURE_LOCAL         = {0x50, 0x4b, 0x03, 0x04};
-const char[*] SIGNATURE_END           = {0x50, 0x4b, 0x05, 0x06};
-const char[*] SIGNATURE_END_ZIP64     = {0x50, 0x4b, 0x06, 0x06};
-const char[*] SIGNATURE_LOCATOR_ZIP64 = {0x50, 0x4b, 0x06, 0x07};
-const char[*] SIGNATURE_DATA          = {0x50, 0x4b, 0x07, 0x08}; // optional
-const char[*] SIGNATURE_DIGITAL_SIG   = {0x50, 0x4b, 0x05, 0x05};
+alias ZipSignature = char[4];
+const ZipSignature SIGNATURE_CENTRAL       = {0x50, 0x4b, 0x01, 0x02};
+const ZipSignature SIGNATURE_LOCAL         = {0x50, 0x4b, 0x03, 0x04};
+const ZipSignature SIGNATURE_END           = {0x50, 0x4b, 0x05, 0x06};
+const ZipSignature SIGNATURE_END_ZIP64     = {0x50, 0x4b, 0x06, 0x06};
+const ZipSignature SIGNATURE_LOCATOR_ZIP64 = {0x50, 0x4b, 0x06, 0x07};
+const ZipSignature SIGNATURE_DATA          = {0x50, 0x4b, 0x07, 0x08}; // optional
+const ZipSignature SIGNATURE_DIGITAL_SIG   = {0x50, 0x4b, 0x05, 0x05};
 
 faultdef NOT_FOUND,
 	INVALID_END_RECORD,
