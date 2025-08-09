@@ -92,10 +92,16 @@ c0952c289095ca9280519c3891cd2038978a330a450dff6c055be8bc29c4
 936875780b000104e803000004e8030000504b0506000000000600060024
 0200009b0400000000`;
 
-fn void test_read_zip_archive() => @pool()
+fn void test_open_zip_archive() => @pool()
 {
-	InStream f = (ByteReader){}.init(zip_data[..]);
-	ZipMeta z = zip::tread(f)!!;
+	ZipReader z;
+
+	// Open a regular zip archive.
+	z = zip::topen((ByteReader){}.init(zip_data[..]))!!;
+	assert(z.len() == 6);
+
+	// Open a damaged zip archive without the end of record signature.
+	z = zip::topen((ByteReader){}.init(zip_data[..^22]))!!;
 	assert(z.len() == 6);
 }
 

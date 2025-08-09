@@ -5,20 +5,20 @@ import std::collections::list;
 import std::hash::crc32;
 
 <*
- Pack a file or folder into a zip archive.
+ Write a file or folder into a zip archive.
 *>
-fn void? pack(Allocator allocator, Path base, File* writer)
+fn void? write(Path base, File* writer) => @pool()
 {
-	ZipWriter p = (ZipWriter){}.init(allocator, base, writer);
+	ZipWriter p = (ZipWriter){}.init(tmem, base, writer);
 
 	// Walk will write the local file headers, the (compressed) data, and
-	// stores the corresponding ZipFile record
+	// stores the corresponding ZipEntry record
 	 base.walk(&packer, &p)!;
 
 	 // Now we need to create the central directory.
 	io::printn("writing central directory: start");
 	usz offset_directory = writer.seek(0, Seek.CURSOR)!;
-	foreach (z : p.files) z.write_central_directory_header(writer)!;
+	foreach (z : p.entries) z.write_central_directory_header(writer)!;
 	io::printn("writing central directory: done");
 
 	 // And finally the End of Directory Record
@@ -26,16 +26,15 @@ fn void? pack(Allocator allocator, Path base, File* writer)
 	p.write_end_record(writer, offset_directory)!;
 	io::printn("writing end record: done");
 }
-fn void? tpack(Path base, File* writer) => pack(tmem, base, writer);
 
-alias ZipFileList = List { ZipFile };
+alias ZipEntryList = List { ZipEntry };
 
 struct ZipWriter
 {
-	Path        base_path;
-	File*       writer;
-	ZipFileList files;
-	Allocator   allocator;
+	Path         base_path;
+	File*        writer;
+	ZipEntryList entries;
+	Allocator    allocator;
 }
 
 fn ZipWriter ZipWriter.init(&p, Allocator allocator, Path base, File* writer)
@@ -44,7 +43,7 @@ fn ZipWriter ZipWriter.init(&p, Allocator allocator, Path base, File* writer)
 	p.base_path = base;
 	p.writer    = writer;
 
-	p.files.init(allocator);
+	p.entries.init(allocator);
 
 	return *p;
 }
@@ -90,8 +89,8 @@ fn String ZipWriter.filename(&p, Allocator allocator, Path path) => @pool()
 
 fn void ZipWriter.free(&p)
 {
-	foreach (f : p.files) f.free();
-	p.files.free();
+	foreach (f : p.entries) f.free();
+	p.entries.free();
 }
 
 fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
@@ -109,7 +108,7 @@ fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
 	io::printn("after load");
 
 	// Hack an uncompressed zip file together
-	ZipFile z;
+	ZipEntry z;
 	z.flag.language   = true;
 	z.crc32 	  = crc32::hash(content); // crc32 should be done on the compressed data, but we do a shortcut here.
 	z.compress_size   = is_dir ? 0 : content.len;
@@ -117,7 +116,7 @@ fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
 	z.filename        = p.filename(p.allocator, path);
 	z.rel_offset      = p.writer.seek(0, Seek.CURSOR)!; 		// offset to begin of Local File Header
 
-	io::printn("\n\nZipFile created:");
+	io::printn("\n\nZipEntry created:");
 	io::printn(z);
 
 	// Write
@@ -137,13 +136,13 @@ fn bool? packer(Path path, bool is_dir, void* arg) => @pool()
 	if (!is_dir) allocator::free(mem, content.ptr);
 
 	// Store ZipEntry since We need it for the central directory
-	p.files.push(z);
+	p.entries.push(z);
 
 	// Continue to the next file/directory recusrively
 	return false;
 }
 
-fn void? ZipFile.write_local_file_header(&z, File* writer)
+fn void? ZipEntry.write_local_file_header(&z, File* writer)
 {
 	 write_le_32(writer, read_le_32(SIGNATURE_LOCAL[:4]))!;
 	 write_le_16(writer, (ushort)z.version_min    )!;
@@ -161,7 +160,7 @@ fn void? ZipFile.write_local_file_header(&z, File* writer)
 	 if (z.extra.len) writer.write(z.extra)!;
 }
 
-fn void? ZipFile.write_central_directory_header(&z, File* writer)
+fn void? ZipEntry.write_central_directory_header(&z, File* writer)
 {
 	 write_le_32(writer, read_le_32(SIGNATURE_CENTRAL[:4]))!;
 	 write_le_16(writer, (ushort)z.version_used    )!;
@@ -191,44 +190,9 @@ fn void? ZipWriter.write_end_record(&p, File* writer, usz offset)
 	 write_le_32(writer, read_le_32(SIGNATURE_END[:4]))!;
 	 write_le_16(writer, 0                )!;
 	 write_le_16(writer, 0                )!;
-	 write_le_16(writer, (ushort)p.files.len()      )!;
-	 write_le_16(writer, (ushort)p.files.len()      )!;
+	 write_le_16(writer, (ushort)p.entries.len()      )!;
+	 write_le_16(writer, (ushort)p.entries.len()      )!;
 	 write_le_32(writer, (uint)size_directory   )!;
 	 write_le_32(writer, (uint)offset           )!;
 	 write_le_16(writer, 0                )!;
-}
-
-<*
- @require io::@is_outstream(stream)
-*>
-macro void? write_le_16(stream, ushort s)
-{
-	stream.write_byte((char)s)!;
-	stream.write_byte((char)(s >> 8))!;
-}
-<*
- @require io::@is_outstream(stream)
-*>
-macro void? write_le_32(stream, uint s)
-{
-	stream.write_byte((char)s)!;
-	stream.write_byte((char)(s >> 8))!;
-	stream.write_byte((char)(s >> 16))!;
-	stream.write_byte((char)(s >> 24))!;
-}
-
-<*
- @require io::@is_outstream(stream)
-*>
-macro void? write_le_64(stream, ulong s)
-{
-	stream.write_byte((char)s)!;
-	stream.write_byte((char)(s >> 8))!;
-	stream.write_byte((char)(s >> 16))!;
-	stream.write_byte((char)(s >> 24))!;
-	stream.write_byte((char)(s >> 32))!;
-	stream.write_byte((char)(s >> 40))!;
-	stream.write_byte((char)(s >> 48))!;
-	stream.write_byte((char)(s >> 56))!;
-	stream.write_byte((char)(s >> 56))!;
 }

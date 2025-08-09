@@ -44,22 +44,23 @@ faultdef NOT_FOUND,
 	UNSUPPORTED_ZIP64;
 
 <*
- Read a zip archive and return its metadata
+ Open a zip archive from a stream. The underyling InSream will not be closed,
+ when `ZipReader.close()` is called.
 *>
-fn ZipMeta? read(Allocator allocator, InStream file)
+fn ZipReader? open(Allocator allocator, InStream file)
 {
-	ZipMeta z;
+	ZipReader z;
 	z.parse(allocator, file)!;
 	return z;
 }
-fn ZipMeta? tread(InStream file) => read(tmem, file);
+fn ZipReader? topen(InStream file) => open(tmem, file);
 
 <*
  ls lists the filenames in the ZIP archive.
 *>
 fn PathList? ls(Allocator allocator, InStream file) => @pool()
 {
-	ZipMeta z;
+	ZipReader z;
 	z.tparse(file)!;
 
 	PathList list;
@@ -82,7 +83,7 @@ fn PathList? ls(Allocator allocator, InStream file) => @pool()
 *>
 fn void? extract(Path base_folder, InStream file) => @pool()
 {
-	ZipMeta z;
+	ZipReader z;
 	z.tparse(file)!;
 
 	String filename, path_str;
@@ -114,51 +115,51 @@ fn void? extract(Path base_folder, InStream file) => @pool()
 }
 
 <*
- Store the metadata for a zip archive. Metadata includes local, central file
- headers and data descriptor as well as the end record.
+ ZipReader stores the metadata for a Zip archive. Metadata includes the
+ relevant offset to seek the local file header (stored in the ZipEntries),
+ central directory headers, and end of record.
 *>
-struct ZipMeta (Printable)
+struct ZipReader (Printable)
 {
-	// Indicate Zip format (zip64 if true)
+	// Indicate ZIP64 file format if true
 	bool zip64;
 
-	// End records are mainly used for parsing the zip file
-	union
-	{
-		struct z64
-		{
-			Zip64EndRecord  record;
-			Zip64EndLocator locator;
-		}
-		ZipEndRecord record;
-	}
+	// Wrapped Zip archive
+	InStream file;
 
-	// Relevant file information is stored here
-	ZipFile[]    files;
+	// Offsets
+	ulong offset_end_record;
+	ulong offset_central_directory;
 
-	Allocator    allocator;
+	// File information in Zip archive
+	ZipEntry[] entries;
+
+	Allocator allocator;
 }
 
-fn void? ZipMeta.tparse(&z, InStream file) => z.parse(tmem, file);
-fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
+fn void? ZipReader.tparse(&z, InStream file) => z.parse(tmem, file);
+fn void? ZipReader.parse(&z, Allocator allocator, InStream file) => @pool()
 {
-	usz nrecords, offset, directory_offset, end_record_loc;
+	usz nrecords, offset;
 
 	ZipLocalFileHeader lh;
 	ZipCentralFileHeader ch;
 	ZipDataDescriptor dd;
+	ZipEndRecord record;
 
 	z.allocator = allocator;
 	defer catch z.free();
 
 	if (try loc = find_signature_r(file, SIGNATURE_END))
 	{
-		end_record_loc = loc;
+		z.offset_end_record = loc;
 	}
 	else
 	{
+		// TODO: Check for Central Directory header as another fallback option?
+
 		// Fallback: End Record not found, scan for Local File Header
-		List {ZipFile} list;
+		List {ZipEntry} list;
 		list.init(allocator);
 
 		file.seek(0, Seek.SET)!;
@@ -166,7 +167,7 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 		{
 
 			file.seek(loc, Seek.SET)!;
-			lh.parse(file, allocator)!;
+			lh.parse(file, tmem)!;
 
 			// Hack together an (incomplete) Central Directory File header
 			ch.filename = lh.filename.copy(allocator);
@@ -179,53 +180,61 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 			ch.crc32 = lh.crc32;
 			ch.rel_offset = (uint)loc;
 
-			ZipFile zip_file;
+			ZipEntry zip_file;
 			zip_file.init(allocator, ch, lh)!;
 			list.push(zip_file);
 		}
 
-		z.files = list.array_view();
+		z.entries = list.array_view();
 
 		return;
 	}
 
-	file.seek(end_record_loc, Seek.SET)!;
-	z.record.parse(file, allocator)!;
+	file.seek(z.offset_end_record, Seek.SET)!;
+	record.parse(file, tmem)!;
 
-	offset = z.record.rel_offset;
-	nrecords = z.record.tot_nr_records;
+	z.offset_central_directory = record.rel_offset;
+
+	offset   = record.rel_offset;
+	nrecords = record.tot_nr_records;
 
 	z.zip64 = offset == 0xFF_FF_FF_FF || nrecords == 0xFF_FF;
 
 	if (z.zip64)
 	{
+		Zip64EndLocator locator;
+		Zip64EndRecord record_z64;
+
 		// Find the Zip64 Locator
-		end_record_loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64)!;
-		file.seek(end_record_loc, Seek.SET)!;
-		z.z64.locator.parse(file)!;
+		usz loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64)!;
+		file.seek(loc, Seek.SET)!;
+		locator.parse(file)!;
 
 		// Parse Zip64 End Record
-		file.seek(z.z64.locator.rel_offset, Seek.SET)!;
-		z.z64.record.parse(file)!;
+		file.seek(locator.rel_offset, Seek.SET)!;
+		record_z64.parse(file)!;
 
-		offset = z.z64.record.rel_offset;
-		nrecords = z.z64.record.tot_nr_records;
+		z.offset_central_directory = record_z64.rel_offset;
+		offset   = record_z64.rel_offset;
+		nrecords = record_z64.tot_nr_records;
 	}
 
-	z.files = allocator::new_array(allocator, ZipFile, nrecords);
+	z.entries = allocator::new_array(allocator, ZipEntry, nrecords);
 
 	// Read file headers
-	foreach (&zip_file : z.files)
+	foreach (&zip_file : z.entries)
 	{
 		file.seek(offset, Seek.SET)!;
-		ch.parse(file, allocator)!;
+		ch.parse(file, tmem)!;
 		offset = file.seek(0, Seek.CURSOR)!;
 
 		file.seek(ch.rel_offset, Seek.SET)!;
 
-		lh.parse(file, allocator)!;
+		lh.parse(file, tmem)!;
 		if (ch.flag.streaming)
 		{
+			// TODO: Write a unit test for a streamed Zip archive.
+
 			// When we are streaming, we dont have the
 			// compress_size available. What we need to do is scan
 			// for the next local header file and use the central
@@ -242,7 +251,7 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 				// `find_next_signature` threw pobably an EOF
 				// error; so we assume we are looking at the
 				// last file that ends with central directory.
-				file.seek(z.zip64 ? (ulong)z.z64.record.rel_offset - 20 : (ulong)z.record.rel_offset - 12, Seek.SET)!;
+				file.seek(z.offset_central_directory + (z.zip64 ? -20 : -12), Seek.SET)!;
 			}
 			dd.parse(file, z.zip64)!;
 		}
@@ -251,27 +260,24 @@ fn void? ZipMeta.parse(&z, Allocator allocator, InStream file)
 	}
 }
 
-fn void ZipMeta.free(&z)
+fn void ZipReader.free(&z)
 {
 	if (!z.allocator) return;
-
-	z.record.free();
-
-	foreach (&zip_file : z.files) zip_file.free();
-	allocator::free(z.allocator, z.files);
-
+	foreach (&zip_file : z.entries) zip_file.free();
+	allocator::free(z.allocator, z.entries);
 	*z = {};
 }
+fn void ZipReader.close(&z) => z.free();
 
-fn usz? ZipMeta.to_format(&z, Formatter *f) @dynamic
+fn usz? ZipReader.to_format(&z, Formatter *f) @dynamic
 {
 	// TODO: Not implemented yet.
 	return 0;
 }
 
-fn usz ZipMeta.len(&z) @operator(len) => z.files.len;
+fn usz ZipReader.len(&z) @operator(len) => z.entries.len;
 
-fn ZipFile ZipMeta.get(&z, usz index) @operator([]) => z.files[index];
+fn ZipEntry ZipReader.get(&z, usz index) @operator([]) => z.entries[index];
 
 <*
  ZipTime is in the MS-DOS format and is a 16-bit packed value representing the
@@ -330,9 +336,9 @@ fn usz? ZipDate.to_format(&self, Formatter *f) @dynamic
 }
 
 <*
- ZipFile contains the metadata for a file entry in the zip archive.
+ ZipEntry contains the metadata for a file entry in the zip archive.
 *>
-struct ZipFile
+struct ZipEntry
 {
 	// Data from Local File Header
 	ushort    version_min;
@@ -356,7 +362,7 @@ struct ZipFile
 	Allocator allocator;
 }
 
-fn void? ZipFile.init(&zf, Allocator allocator, ZipCentralFileHeader cfh, ZipLocalFileHeader lfh, ZipDataDescriptor desc = {})
+fn void? ZipEntry.init(&zf, Allocator allocator, ZipCentralFileHeader cfh, ZipLocalFileHeader lfh, ZipDataDescriptor desc = {})
 {
 	// Data from Local File Header
 	zf.version_min      = lfh.version_min;
@@ -416,14 +422,14 @@ fn void? ZipFile.init(&zf, Allocator allocator, ZipCentralFileHeader cfh, ZipLoc
 	zf.allocator = allocator;
 }
 
-fn void ZipFile.free(&self)
+fn void ZipEntry.free(&self)
 {
 	if (!self.allocator) return;
 	self.filename.free(self.allocator);
 	self.extra.free(self.allocator);
 }
 
-fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
+fn usz? ZipEntry.to_format(&zf, Formatter *f) @dynamic
 {
 	return f.printf("%-40s %-12d %-12d %-12d\n",
 			zf.filename, zf.compress_size, zf.uncompress_size, zf.compress_method);
@@ -432,14 +438,14 @@ fn usz? ZipFile.to_format(&zf, Formatter *f) @dynamic
 <*
  Bit 3 of general-purpose flag
 *>
-fn bool ZipFile.streaming(&zf) => zf.flag.streaming;
+fn bool ZipEntry.streaming(&zf) => zf.flag.streaming;
 
 <*
- Returns a LimitReader for the compressed (!) data of the ZipFile.
+ Returns a LimitReader for the compressed (!) data of the ZipEntry.
  Do not close the LimitReader.
  @param [in] file : "Zip archive file stream"
 *>
-fn LimitReader? ZipFile.reader(&zf, InStream file)
+fn LimitReader? ZipEntry.reader(&zf, InStream file)
 {
 	file.seek(zf.file_offset, Seek.SET)!;
 	return { file, zf.compress_size };
@@ -455,7 +461,7 @@ fn LimitReader? ZipFile.reader(&zf, InStream file)
  @param file   : "Zip Archive stream"
  @return "Number of (decompressed) bytes written to writer"
 *>
-fn usz? ZipFile.extract_to(&zf, OutStream writer, InStream file, bool *checksum = null) => @pool()
+fn usz? ZipEntry.extract_to(&zf, OutStream writer, InStream file, bool *checksum = null) => @pool()
 {
 	char[] src, dst;
 
@@ -844,106 +850,4 @@ fn void? ZipDataDescriptor.parse(&d, InStream in, bool zip64 = false)
 		d.compress_size   = read_le_64(buf[ 4:8]);
 		d.uncompress_size = read_le_64(buf[12:8]);
 	}
-}
-
-fn String? read_n(InStream f, usz n, Allocator allocator) @private => @pool()
-{
-	if (n == 0) return "";
-	char[] buf = mem::talloc_array(char, n);
-	usz read = 0;
-	while (read < n)
-	{
-		read += f.read(buf[read : n - read])!;
-	}
-	return ((String)buf[:n]).copy(allocator);
-}
-
-<*
- Pack two bytes into a ushort (little-endian).
-
- @require p.len >= 2
-*>
-fn ushort read_le_16(char[] p) @inline @private
-{
-	return ((ushort) p[0]) | ((ushort) p[1] << 8);
-}
-
-<*
- Pack four bytes into an uint (little-endian).
-
- @require p.len >= 4
-*>
-fn uint read_le_32(char[] p) @inline @private
-{
-	return ((uint) p[0]) |
-		((uint) p[1] << 8) |
-		((uint) p[2] << 16) |
-		((uint) p[3] << 24);
-}
-
-<*
- Pack eight bytes into an ulong (little-endian).
-
- @require p.len >= 8
-*>
-fn ulong read_le_64(char[] p) @inline @private
-{
-	return ((ulong) p[0]) |
-		((ulong) p[1] << 8) |
-		((ulong) p[2] << 16) |
-		((ulong) p[3] << 24) |
-		((ulong) p[4] << 32) |
-		((ulong) p[5] << 40) |
-		((ulong) p[6] << 48) |
-		((ulong) p[7] << 56);
-}
-
-<*
- Scan from the end of the file for signature.
-*>
-fn usz? find_signature_r(InStream in, char[4] sig)
-{
-	usz i, n, size, offset;
-	char[256] buf;
-
-	size = in.seek(offset, Seek.END)!;
-
-	offset = 0;
-	while (offset < size)
-	{
-		offset += 128;
-		if (offset > size) offset = size;
-		in.seek(-offset, Seek.END)!;
-		n = in.read(&buf)!;
-
-		// Scan for end record magic number
-		if (try loc = ((String)buf[:n]).index_of((String)sig[..]))
-		{
-			return size - offset + loc;
-		}
-	}
-
-	return NOT_FOUND?;
-}
-
-<*
- Scan from the current file cursor for a signature.
-*>
-fn usz? find_next_signature(InStream in, char[4] sig)
-{
-	usz n;
-	char[256] buf;
-
-	while (try read = in.read(&buf) && read > 0)
-	{
-		n += read;
-
-		// Scan for Signature
-		if (try loc = ((String)buf[:read]).index_of((String)sig[..]))
-		{
-			return in.seek(0,Seek.CURSOR)! - read + loc;
-		}
-	}
-
-	return NOT_FOUND?;
 }

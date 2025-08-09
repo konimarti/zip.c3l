@@ -93,6 +93,8 @@ fn void main()
 
 - `fn void? zip::extract(String path, String output_dir)`: Extract all files in zip archive to a directory.
 
+- `fn void? zip::write(Path path, OutStream output)`: Create a zip archive with all files in Path and write it to output.
+
 
 ## License
 

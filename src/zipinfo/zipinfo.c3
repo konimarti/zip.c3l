@@ -22,19 +22,20 @@ fn void show_zip_info(String filename) => @pool()
 
 	io::printfn("\n=== zip archive: %s", filename);
 
-	ZipMeta z = zip::tread(&f)!!;
+	ZipReader z = zip::topen(&f)!!;
+	defer z.close();
 
 	// Print file info (filename, compressed and uncompressed sizes, compression)
 	io::printfn("%-40s %-12s %-12s %-12s", "Filename", "Comp. Size", "Size", "Compression");
-	foreach (zip_file : z) io::print(zip_file);
+	foreach (entry : z) io::print(entry);
 
 	// Print content of files.
-	foreach (zip_file : z)
+	foreach (entry : z)
 	{
-		io::printfn("\n*** filename : %s", zip_file.filename);
-		io::printfn("    date time: %s %s", zip_file.date, zip_file.time);
+		io::printfn("\n*** filename : %s", entry.filename);
+		io::printfn("    date time: %s %s", entry.date, entry.time);
 		io::printn("+++");
-		zip_file.extract_to(io::stdout(), &f)!!;
+		entry.extract_to(io::stdout(), &f)!!;
 		io::printn("---");
 	}
 
