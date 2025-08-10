@@ -8,17 +8,18 @@ import std::hash::crc32;
  Create a zip archive. Returns an empty zip writer. Add files to the it.
  Close the ZipWrier to write the central directory and end record.
 *>
-fn ZipWriter? create(Allocator allocator, OutStream writer) => @pool()
+fn ZipWriter? create(Allocator allocator, OutStream output) => @pool()
 {
-	return (ZipWriter){}.init(allocator, {}, writer);
+	return (ZipWriter){}.init(allocator, {}, output);
 }
+fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
 
 <*
- Write a file or folder into a zip archive.
+ Archive a file or folder into a zip archive and write it to output.
 *>
-fn void? write(String path, OutStream writer) => @pool()
+fn void? archive(String path, OutStream output) => @pool()
 {
-	ZipWriter p = (ZipWriter){}.init(tmem, path, writer)!;
+	ZipWriter p = (ZipWriter){}.init(tmem, path, output)!;
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record
@@ -90,33 +91,49 @@ fn void ZipWriter.free(&w)
 	*w = {};
 }
 
+
+// TODO: Move to ZipEntry struct
+fn ZipEntry*? ZipEntry.init_with_buffer(&entry,
+	Allocator allocator, String filename, char[] content,
+	ZipCompressMethod compress_method = COMPRESS_STORE)
+{
+	entry.version_min     = 0; 			// TODO
+	entry.flag.language   = true; 			// We are only using utf-8 strings
+	entry.compress_method = compress_method;
+	entry.crc32 	      = crc32::hash(content); 	// crc32 should be done on the compressed data, but we do a shortcut here.
+	entry.compress_size   = content.len;		// TODO: Make zip64 compatible
+	entry.uncompress_size = content.len;		// TODO: Make zip64 compatible
+	entry.filename        = filename.copy(allocator);
+
+	entry.version_used    = 0; // TODO
+	entry.internal_attr   = 0;
+	entry.external_attr   = 0;
+
+	entry.allocator       = allocator;
+
+	return entry;
+}
+
 <*
  Add content to the zip file.
 
  The caller of this function should ensure that the filename follows the zip
  specification (no leading slash and trailing slash for directories).
 *>
-fn void? ZipWriter.add_buffer(&w, String filename, char[] content)
+fn void? ZipWriter.add_buffer(&w, String filename, char[] content,
+	ZipCompressMethod compress_method = COMPRESS_STORE)
 {
-	// Hack an uncompressed zip file together
-	ZipEntry entry;
-	entry.version_min     = 0; // TODO
-	entry.flag.language   = true;
-	entry.compress_method = 0; // TODO
-	entry.crc32 	      = crc32::hash(content); // crc32 should be done on the compressed data, but we do a shortcut here.
-	entry.compress_size   = content.len;		// TODO: Make zip64 compatible
-	entry.uncompress_size = content.len;		// TODO: Make zip64 compatible
-	entry.filename        = filename.copy(w.allocator);
-	// z.extra		  = null; // TODO
-	entry.rel_offset      = w.writer.tell(); 	  // offset to begin of Local File Header // TODO: Make zip64 compatible
+	ZipEntry entry = *(ZipEntry){}.init_with_buffer(w.allocator, filename,
+		content, compress_method)!;
 
-	entry.version_used    = 0; // TODO
-	entry.internal_attr   = 0; // TODO
-	entry.external_attr   = 0; // TODO
-
+	// Store local date and time
 	entry.set_date_time(datetime::now().to_local());
 
-	// Write
+ 	// Store offset to Local File Header
+	entry.rel_offset = w.writer.tell();
+	// TODO: entry.zip64_format() // Make zip64 compatible (rel_offset, (un)compress sizes)
+
+	// Write local file header
 	entry.write_local_file_header(&w.writer)!;
 
 	// Save position after header as file_offset

@@ -15,7 +15,7 @@ import std::collections::list;
 import tinf::inflate;
 
 // Compression methods
-alias ZipCompressMethod = uint;
+alias ZipCompressMethod = ushort;
 const ZipCompressMethod COMPRESS_STORE   = 0;
 const ZipCompressMethod COMPRESS_DEFLATE = 8;
 const ZipCompressMethod COMPRESS_BZIP2   = 12; // TODO: unsupported
@@ -36,6 +36,7 @@ const ZipSignature SIGNATURE_DATA          = {0x50, 0x4b, 0x07, 0x08}; // option
 const ZipSignature SIGNATURE_DIGITAL_SIG   = {0x50, 0x4b, 0x05, 0x05};
 
 faultdef NOT_FOUND,
+	EXPECT_FOLDER,
 	INVALID_END_RECORD,
 	INVALID_CENTRAL_FILE_HEADER,
 	INVALID_LOCAL_FILE_HEADER,
@@ -49,52 +50,32 @@ faultdef NOT_FOUND,
  Open a zip archive from a stream. The underyling InSream will not be closed,
  when `ZipReader.close()` is called.
 *>
-fn ZipReader? open(Allocator allocator, InStream file)
+fn ZipReader? open(Allocator allocator, InStream archive)
 {
-	ZipReader z;
-	z.parse(allocator, file)!;
-	return z;
+	ZipReader reader;
+	reader.parse(allocator, archive)!;
+	return reader;
 }
-fn ZipReader? topen(InStream file) => open(tmem, file);
+fn ZipReader? topen(InStream archive) @inline => open(tmem, archive);
 
 <*
- ls lists the filenames in the ZIP archive.
+ Extract the zip archive to folder.
 *>
-fn PathList? ls(Allocator allocator, InStream file) => @pool()
+fn void? extract(InStream archive, String folder) => @pool()
 {
-	ZipReader z;
-	z.tparse(file)!;
+	Path base_folder = path::temp(folder)!;
+	if (!path::is_dir(base_folder)) return EXPECT_FOLDER?;
 
-	PathList list;
-	list.init(allocator);
-	defer catch list.free();
-
-	foreach (zip_file : z)
-	{
-		String path_str = path::normalize(zip_file.filename, PathEnv.POSIX)!;
-		Path path = path::new(allocator, path_str)!!;
-		list.push(path);
-	}
-	return list;
-}
-
-<*
- Extracts the files to the provided folder
-
- @require path::is_dir(base_folder) : "Folder must be a directory"
-*>
-fn void? extract(Path base_folder, InStream file) => @pool()
-{
-	ZipReader z;
-	z.tparse(file)!;
+	ZipReader reader;
+	reader.tparse(archive)!;
 
 	String filename, path_str;
-	Path   folder, path;
+	Path   path;
 	bool   is_directory;
 
-	foreach (zip_file : z)
+	foreach (entry : reader)
 	{
-		filename = zip_file.filename;
+		filename = entry.filename;
 		is_directory = filename.ends_with("/");
 
 		// Normalize path from UNIX sep to whatever is used
@@ -110,11 +91,33 @@ fn void? extract(Path base_folder, InStream file) => @pool()
 		path::mkdir(path.dirname(), true)!;
 
 		// Extract file
-		File save = file::open(path.str_view(), "w")!;
-		zip_file.extract_to(&save, file)!;
-		save.close()!;
+		File f = file::open(path.str_view(), "w")!;
+		entry.extract_to(archive, &f)!;
+		f.close()!;
 	}
 }
+<*
+ List the filenames in a zip archive.
+*>
+fn PathList? ls(Allocator allocator, InStream archive) => @pool()
+{
+	ZipReader reader;
+	reader.tparse(archive)!;
+
+	PathList list;
+	list.init(allocator);
+	defer catch list.free();
+
+	foreach (entry : reader)
+	{
+		String path_str = path::normalize(entry.filename, PathEnv.POSIX)!;
+		Path path = path::new(allocator, path_str)!!;
+		list.push(path);
+	}
+	return list;
+}
+fn PathList? tls(InStream archive) @inline => ls(tmem, archive);
+
 
 <*
  ZipReader stores the metadata for a Zip archive. Metadata includes the
@@ -472,25 +475,25 @@ fn bool ZipEntry.streaming(&zf) => zf.flag.streaming;
 <*
  Returns a LimitReader for the compressed (!) data of the ZipEntry.
  Do not close the LimitReader.
- @param [in] file : "Zip archive file stream"
+ @param [in] archive : "Zip archive file stream"
 *>
-fn LimitReader? ZipEntry.reader(&zf, InStream file)
+fn LimitReader? ZipEntry.compressed_data(&zf, InStream archive)
 {
-	file.seek(zf.file_offset, Seek.SET)!;
-	return { file, zf.compress_size };
+	archive.seek(zf.file_offset, Seek.SET)!;
+	return { archive, zf.compress_size };
 }
 
 <*
- Extract and Write the (decompressed) data to the OutStream writer.
+ Extract, decompress and write the file content to an output stream.
 
  The CRC32 checksum of the decompressed data is calculated and compared to the
  stored checksum.
 
- @param writer : "Write decompressed data to writer"
- @param file   : "Zip Archive stream"
- @return "Number of (decompressed) bytes written to writer"
+ @param archive : "Zip Archive stream"
+ @param output  : "Write decompressed data to writer"
+ @return "Number of (decompressed) bytes written to output"
 *>
-fn usz? ZipEntry.extract_to(&zf, OutStream writer, InStream file, bool *checksum = null) => @pool()
+fn usz? ZipEntry.extract_to(&zf, InStream archive, OutStream output, bool *checksum = null) => @pool()
 {
 	char[] src, dst;
 
@@ -503,7 +506,7 @@ fn usz? ZipEntry.extract_to(&zf, OutStream writer, InStream file, bool *checksum
 			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
 
 		// Read all data from limit reader
-		io::read_all(&&zf.reader(file), dst)!;
+		io::read_all(&&zf.compressed_data(archive), dst)!;
 
 	case COMPRESS_DEFLATE:
 		assert(zf.compress_size != zf.uncompress_size,
@@ -511,7 +514,7 @@ fn usz? ZipEntry.extract_to(&zf, OutStream writer, InStream file, bool *checksum
 
 		// Read all data from limit reader
 		src = mem::temp_array(char, zf.compress_size);
-		io::read_all(&&zf.reader(file), src)!;
+		io::read_all(&&zf.compressed_data(archive), src)!;
 
 		// Uncompress data
 		inflate::uncompress(dst, src)!;
@@ -525,7 +528,7 @@ fn usz? ZipEntry.extract_to(&zf, OutStream writer, InStream file, bool *checksum
 	if (checksum) *checksum = crc32::hash(dst) == zf.crc32;
 
 	// Write data
-	return io::write_all(writer, dst);
+	return io::write_all(output, dst);
 }
 
 <*
