@@ -17,14 +17,24 @@ relying on external dependencies or heavy native bindings.
  
 ## Installation
 
-1. **Add to your project (usually in your `lib` folder):**
+1. **Add to your project:**
 Clone or add `zip.c3l` as a submodule in your repository.
 
 ```sh
 git submodule add https://github.com/konimarti/zip.c3l.git
+git submodule update --init --recursive
 ```
 
-2. **Import in your C3 code:**
+2. *Update `project.json`:*
+
+```json
+{
+    "dependency-search-paths": [ "lib" ],
+    "dependencies": [ "zip" ]
+}
+```
+
+3. **Import in your C3 code:**
 Import the module where you need zip archive functionality:
 
 ```c3
@@ -39,10 +49,7 @@ import archive::zip;
 ```c3
 import archive::zip;
 
-fn void main()
-{
-    zip::extract("archive.zip", "output/")!!;
-}
+fn void main() => zip::extract("archive.zip", "output/")!!;
 ```
 
 
@@ -55,7 +62,6 @@ fn void main()
 {
     ZipWriter z = zip::create("output.zip")!!;
     z.add_buffer("document.txt", "Hello World!")!!;
-    z.add_path(z, "image.png", "local_image.png")!!;
     z.close();
 }
 ```
@@ -71,7 +77,7 @@ fn void main()
 {
     ZipReader z = zip::open("archive.zip");
     foreach (entry : z) {
-	io::printn(entry.filename);
+	    io::printn(entry.filename);
     }
     z.close();
 }
@@ -80,20 +86,21 @@ fn void main()
 
 ## API Reference
 
+- `fn void? zip::extract(String path, String output_dir)`: Extract all files in zip archive to a directory.
+- `fn void? zip::write(Path path, OutStream output)`: Create a zip archive with all files in Path and write it to output.
+
+*ZipReader*
 - `fn ZipReader? zip::open(String path)`: Open an existing zip archive for reading.
 - `fn ZipEntry? ZipReader.get(usz index) @operator([])`: Get the entry at index.
 - `fn usz? ZipReader.len() @operator(len)`: Get number of entries.
 - `fn usz? ZipReader.extract(ZipEntry entry, OutStream w)`: Extract a specific entry to a stream..
 - `fn void ZipReader.close()`: Close the zip archive.
 
+*ZipWriter*
 - `fn ZipWriter? zip::create(String path)`: Create a new zip archive for writing.
 - `fn void? ZipWriter.add_buffer(String filename, char[] content)`: Add a file with the specified filename and content.
-- `fn void? ZipWriter.add_path(String path)`: Add a file from an existing source path.
 - `fn void ZipWriter.close()`: Close the zip archive and finalize changes.
 
-- `fn void? zip::extract(String path, String output_dir)`: Extract all files in zip archive to a directory.
-
-- `fn void? zip::write(Path path, OutStream output)`: Create a zip archive with all files in Path and write it to output.
 
 
 ## License
