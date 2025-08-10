@@ -102,7 +102,7 @@ struct Zip64ExtraField
 	uint   number;
 }
 
-fn void? Zip64ExtraField.parse(&f, char[] extra)
+fn void? Zip64ExtraField.unpack(&self, char[] extra)
 {
 	if (extra.len < 4 && (extra.len >= 2 && read_le_16(extra[0:2]) != ZIP64_EXTRA_HEADER))
 	{
@@ -111,18 +111,32 @@ fn void? Zip64ExtraField.parse(&f, char[] extra)
 
 	usz len = read_le_16(extra[2:2]);
 
-	f.header_id       = read_le_16(extra[ 0:2]);
-	f.data_size       = read_le_16(extra[ 2:2]);
-	f.uncompress_size = read_le_64(extra[ 4:8]);
+	self.header_id       = read_le_16(extra[ 0:2]);
+	self.data_size       = read_le_16(extra[ 2:2]);
+	self.uncompress_size = read_le_64(extra[ 4:8]);
 
 	if (len < 16) return;
-	f.compress_size   = read_le_64(extra[12:8]);
+	self.compress_size   = read_le_64(extra[12:8]);
 
 	if (len < 24) return;
-	f.rel_offset      = read_le_64(extra[20:8]);
+	self.rel_offset      = read_le_64(extra[20:8]);
 
 	if (len < 32) return;
-	f.number          = read_le_32(extra[28:4]);
+	self.number          = read_le_32(extra[28:4]);
+}
+
+fn void? Zip64ExtraField.pack(&self, char[] extra)
+{
+	// if (extra.len < 28 + 4) return BUF_ERROR?;
+
+	ByteWriter *writer = (ByteWriter){}.init_with_buffer(extra);
+
+	write_le_16(writer, self.header_id)!;
+	write_le_16(writer, self.data_size)!;
+	write_le_64(writer, self.uncompress_size)!;
+	write_le_64(writer, self.compress_size)!;
+	write_le_64(writer, self.rel_offset)!;
+	write_le_32(writer, self.number)!;
 }
 
 <*
@@ -148,7 +162,7 @@ struct UnicodePathExtraField
 	String filename; 	// UnicodeName
 }
 
-fn void? UnicodePathExtraField.parse(&f, char[] extra)
+fn void? UnicodePathExtraField.unpack(&f, char[] extra)
 {
 	if (extra.len < 9 ||
 		(extra.len >= 2 && read_le_16(extra[0:2]) != UNICODE_PATH_HEADER))

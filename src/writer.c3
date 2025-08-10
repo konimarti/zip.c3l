@@ -131,7 +131,9 @@ fn void? ZipWriter.add_buffer(&w, String filename, char[] content,
 
  	// Store offset to Local File Header
 	entry.rel_offset = w.writer.tell();
-	// TODO: entry.zip64_format() // Make zip64 compatible (rel_offset, (un)compress sizes)
+
+	// Re-format to ZIP64 if needed
+	entry.format_zip64()!;
 
 	// Write local file header
 	entry.write_local_file_header(&w.writer)!;

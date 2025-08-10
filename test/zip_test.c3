@@ -23,7 +23,7 @@ fn void test_read_end_records() => @pool()
 
 	// Parse record
 	ZipEndRecord r;
-	r.parse(in)!!;
+	r.unpack(in)!!;
 
 	assert(r.signature == 0x06054b50,
 		"got: %d, but want: %d", r.signature, 0x06054b50);
