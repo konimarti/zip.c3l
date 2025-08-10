@@ -8,6 +8,7 @@
 module archive::zip;
 
 import std::io;
+import std::time;
 import std::hash::crc32;
 import std::collections::list;
 
@@ -434,6 +435,33 @@ fn usz? ZipEntry.to_format(&zf, Formatter *f) @dynamic
 {
 	return f.printf("%-40s %-12d %-12d %-12d\n",
 			zf.filename, zf.compress_size, zf.uncompress_size, zf.compress_method);
+}
+
+<*
+  Set DateTime to packed MS-DOS date and time.
+*>
+fn void ZipEntry.set_date_time(&entry, DateTime t) @inline
+{
+	entry.date.year    = (char)(t.year - 1980);
+	entry.date.month   = t.month.ordinal + 1;
+	entry.date.day     = t.day;
+	entry.time.hours   = t.hour;
+	entry.time.minutes = t.min;
+	entry.time.halfsec = t.sec / 2;
+}
+
+<*
+  Get DateTime from packed MS-DOS date and time.
+*>
+fn DateTime ZipEntry.get_date_time(&entry) @inline
+{
+	return datetime::from_date(
+		entry.date.year + 1980,
+		(Month)(entry.date.month - 1),
+		entry.date.day,
+		entry.time.hours,
+		entry.time.minutes,
+		entry.time.halfsec * 2);
 }
 
 <*

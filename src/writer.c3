@@ -31,7 +31,7 @@ fn void? write(String path, OutStream writer) => @pool()
 fn bool? zip_packer(Path path, bool is_dir, void* arg) => @pool()
 {
 	if (!arg) return true; // Stop directory walk
-	ZipWriter *p = (ZipWriter*)arg;
+	ZipWriter *w = (ZipWriter*)arg;
 
 	// Get file content
 	char[] content = is_dir ? {} : file::load_path(mem, path)!;
@@ -104,23 +104,17 @@ fn void? ZipWriter.add_buffer(&w, String filename, char[] content)
 	entry.flag.language   = true;
 	entry.compress_method = 0; // TODO
 	entry.crc32 	      = crc32::hash(content); // crc32 should be done on the compressed data, but we do a shortcut here.
-	entry.compress_size   = content.len;
-	entry.uncompress_size = content.len;
+	entry.compress_size   = content.len;		// TODO: Make zip64 compatible
+	entry.uncompress_size = content.len;		// TODO: Make zip64 compatible
 	entry.filename        = filename.copy(w.allocator);
 	// z.extra		  = null; // TODO
-	entry.rel_offset      = w.writer.tell(); 	  // offset to begin of Local File Header
+	entry.rel_offset      = w.writer.tell(); 	  // offset to begin of Local File Header // TODO: Make zip64 compatible
 
 	entry.version_used    = 0; // TODO
 	entry.internal_attr   = 0; // TODO
 	entry.external_attr   = 0; // TODO
 
-	DateTime time_now = datetime::now().to_local();
-	entry.date.year    = (char)(time_now.year - 1980);
-	entry.date.month   = time_now.month.ordinal + 1;
-	entry.date.day     = time_now.day;
-	entry.time.hours   = time_now.hour;
-	entry.time.minutes = time_now.min;
-	entry.time.halfsec = time_now.sec / 2;
+	entry.set_date_time(datetime::now().to_local());
 
 	// Write
 	entry.write_local_file_header(&w.writer)!;
