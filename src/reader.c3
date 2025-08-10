@@ -354,7 +354,7 @@ struct ZipEntry
 	String    extra;
 
 	// Data from Central Directory Header
-	ushort    version_used ;
+	ushort    version_used;
 	ushort    internal_attr;
 	uint      external_attr;
 	ulong     rel_offset; 		// offset to begin of Local File Header

@@ -3,6 +3,30 @@ module archive::zip;
 import std::io;
 
 <*
+ Wrapped OutStream to provide number of written bytes.
+*>
+struct ZipOutStream (OutStream)
+{
+	OutStream w;
+	ulong written;
+}
+
+fn ulong ZipOutStream.tell(&self) => self.written;
+
+fn usz? ZipOutStream.write(&self,  char[] bytes) @dynamic
+{
+	usz? n = self.w.write(bytes);
+	if (try n) self.written += n;
+	return n;
+}
+
+fn void? ZipOutStream.write_byte(&self, char c) @dynamic
+{
+	if (catch err = self.w.write_byte(c)) return err?;
+	self.written++;
+}
+
+<*
  Pack two bytes into a ushort (little-endian).
 
  @require p.len >= 2

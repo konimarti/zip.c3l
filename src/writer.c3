@@ -1,32 +1,8 @@
 module archive::zip;
 
-import std::io;
+import std::io, std::time;
 import std::collections::list;
 import std::hash::crc32;
-
-<*
- Wrapped OutStream to provide number of written bytes.
-*>
-struct ZipOutStream (OutStream)
-{
-	OutStream w;
-	ulong written;
-}
-
-fn ulong ZipOutStream.tell(&self) => self.written;
-
-fn usz? ZipOutStream.write(&self,  char[] bytes) @dynamic
-{
-	usz? n = self.w.write(bytes);
-	if (try n) self.written += n;
-	return n;
-}
-
-fn void? ZipOutStream.write_byte(&self, char c) @dynamic
-{
-	if (catch err = self.w.write_byte(c)) return err?;
-	self.written++;
-}
 
 <*
  Write a file or folder into a zip archive.
@@ -39,16 +15,15 @@ fn void? write(String path, OutStream writer) => @pool()
 	// stores the corresponding ZipEntry record
 	path::temp(path).walk(&zip_packer, &p)!;
 
-	 // Now we need to create the central directory.
-	io::printn("writing central directory: start");
+	// Now we need to create the central directory.
 	usz offset_directory = p.writer.tell();
-	foreach (entry : p.entries) entry.write_central_directory_header(writer)!;
-	io::printn("writing central directory: done");
+	foreach (entry : p.entries)
+	{
+		entry.write_central_directory_header(writer)!;
+	}
 
-	 // And finally the End of Directory Record
-	io::printn("writing end record: start");
+	// And finally the End of Directory Record
 	p.write_end_record(offset_directory)!;
-	io::printn("writing end record: done");
 }
 
 alias ZipEntryList = List { ZipEntry };
@@ -72,12 +47,33 @@ fn ZipWriter? ZipWriter.init(&p, Allocator allocator, String path, OutStream wri
 	return *p;
 }
 
+fn void test_zip_writer_filename() @test => @pool()
+{
+	String got;
+
+	got = prepare_filename(tmem,
+		path::temp("/tmp/foo"), path::temp("/tmp"))!!;
+	assert(got == "tmp/foo", "got: %s", got);
+
+	got = prepare_filename(tmem,
+		path::temp("tmp/bar"), path::temp("tmp"))!!;
+	assert(got == "tmp/bar", "got: %s", got);
+
+	got = prepare_filename(tmem,
+		path::temp("tmp\\foo\\bar"), path::temp("tmp"))!!;
+	assert(got == "tmp/foo/bar", "got: %s", got);
+
+	got = prepare_filename(tmem,
+		path::temp("tmp\\foo\\bar"), path::temp("/"))!!;
+	assert(got == "tmp/foo/bar", "got: %s", got);
+}
+
 <*
  Returns zip-compatible filename. Called from `zip_packer()`.
 *>
-fn String ZipWriter.filename(&p, Allocator allocator, Path path) @local => @pool()
+fn String prepare_filename(Allocator allocator, Path path, Path base_path) @local => @pool()
 {
-	String base = p.base_path.absolute(tmem)!!.str_view();
+	String base = base_path.absolute(tmem)!!.str_view();
 	String name = path.str_view().strip(base).tcopy();
 	DString tmp = dstring::temp("");
 
@@ -92,11 +88,11 @@ fn String ZipWriter.filename(&p, Allocator allocator, Path path) @local => @pool
 	}
 
 	// Append prefix path
-	if (path::is_dir(p.base_path))
+	if (path::is_dir(base_path))
 	{
-		String top = p.base_path.basename().trim("/");
+		String top = base_path.basename().trim("/");
 		tmp.append_chars(top);
-		tmp.append_char('/');
+		if (top.len) tmp.append_char('/');
 	}
 
 	// Append filename path (rebased from base_path)
@@ -135,12 +131,27 @@ fn bool? zip_packer(Path path, bool is_dir, void* arg) => @pool()
 
 	// Hack an uncompressed zip file together
 	ZipEntry z;
+	z.version_min     = 0; // TODO
 	z.flag.language   = true;
+	z.compress_method = 0; // TODO
 	z.crc32 	  = crc32::hash(content); // crc32 should be done on the compressed data, but we do a shortcut here.
 	z.compress_size   = is_dir ? 0 : content.len;
 	z.uncompress_size = is_dir ? 0 : content.len;
-	z.filename        = p.filename(p.allocator, path);
-	z.rel_offset      = p.writer.tell(); 		// offset to begin of Local File Header
+	z.filename        = prepare_filename(p.allocator, path, p.base_path);
+	z.rel_offset      = p.writer.tell(); 	  // offset to begin of Local File Header
+	z.file_offset     = 0;
+
+	z.version_used    = 0; // TODO
+	z.internal_attr   = 0; // TODO
+	z.external_attr   = 0; // TODO
+
+	DateTime time_now = datetime::now().to_local();
+	z.date.year    = (char)(time_now.year - 1980);
+	z.date.month   = time_now.month.ordinal + 1;
+	z.date.day     = time_now.day;
+	z.time.hours   = time_now.hour;
+	z.time.minutes = time_now.min;
+	z.time.halfsec = time_now.sec / 2;
 
 	io::printn("\n\nZipEntry created:");
 	io::printn(z);
@@ -189,21 +200,21 @@ fn void? ZipEntry.write_local_file_header(&z, OutStream writer)
 fn void? ZipEntry.write_central_directory_header(&z, OutStream writer)
 {
 	 write_le_32(writer, read_le_32(SIGNATURE_CENTRAL[:4]))!;
-	 write_le_16(writer, (ushort)z.version_used    )!;
-	 write_le_16(writer, (ushort)z.version_min    )!;
-	 write_le_16(writer, (ushort)z.flag   )!;
+	 write_le_16(writer, (ushort)z.version_used)!;
+	 write_le_16(writer, (ushort)z.version_min)!;
+	 write_le_16(writer, (ushort)z.flag)!;
 	 write_le_16(writer, (ushort)z.compress_method)!;
-	 write_le_16(writer, (ushort)z.time.last_mod_time  )!;
-	 write_le_16(writer, (ushort)z.date.last_mod_date  )!;
-	 write_le_32(writer, (uint)z.crc32          )!;
-	 write_le_32(writer, (uint)z.compress_size  )!;
+	 write_le_16(writer, (ushort)z.time.last_mod_time)!;
+	 write_le_16(writer, (ushort)z.date.last_mod_date)!;
+	 write_le_32(writer, (uint)z.crc32)!;
+	 write_le_32(writer, (uint)z.compress_size)!;
 	 write_le_32(writer, (uint)z.uncompress_size)!;
-	 write_le_16(writer, (ushort)z.filename.len   )!;
-	 write_le_16(writer, (ushort)z.extra.len      )!;
-	 write_le_16(writer, 0                )!;
-	 write_le_16(writer, 0                )!;
-	 write_le_16(writer, 0                )!;
-	 write_le_32(writer, 0                )!;
+	 write_le_16(writer, (ushort)z.filename.len)!;
+	 write_le_16(writer, (ushort)z.extra.len)!;
+	 write_le_16(writer, 0)!;
+	 write_le_16(writer, 0)!;
+	 write_le_16(writer, 0)!;
+	 write_le_32(writer, 0)!;
 	 write_le_32(writer, (uint)z.rel_offset     )!;
 
 	 if (z.filename.len) writer.write(z.filename)!;
@@ -215,11 +226,11 @@ fn void? ZipWriter.write_end_record(&p, usz offset)
 	OutStream writer = &p.writer;
 	 usz size_directory = p.writer.tell() - offset;
 	 write_le_32(writer, read_le_32(SIGNATURE_END[:4]))!;
-	 write_le_16(writer, 0                )!;
-	 write_le_16(writer, 0                )!;
-	 write_le_16(writer, (ushort)p.entries.len()      )!;
-	 write_le_16(writer, (ushort)p.entries.len()      )!;
-	 write_le_32(writer, (uint)size_directory   )!;
-	 write_le_32(writer, (uint)offset           )!;
-	 write_le_16(writer, 0                )!;
+	 write_le_16(writer, 0)!;
+	 write_le_16(writer, 0)!;
+	 write_le_16(writer, (ushort)p.entries.len())!;
+	 write_le_16(writer, (ushort)p.entries.len())!;
+	 write_le_32(writer, (uint)size_directory)!;
+	 write_le_32(writer, (uint)offset)!;
+	 write_le_16(writer, 0)!;
 }
