@@ -72,7 +72,7 @@ fn void? extract(InStream archive, String folder) => @pool()
 
 	String filename, path_str;
 	Path   path;
-	bool   is_directory;
+	bool   is_directory, checksum;
 
 	foreach (entry : reader)
 	{
@@ -91,9 +91,12 @@ fn void? extract(InStream archive, String folder) => @pool()
 		}
 		path::mkdir(path.dirname(), true)!;
 
+		io::printfn("Extracting %s to %s", filename, path);
+
 		// Extract file
 		File f = file::open(path.str_view(), "w")!;
-		entry.extract_to(archive, &f)!;
+		entry.extract_to(archive, &f, &checksum)!;
+		if (!checksum) io::eprintfn("File with incorrect CRC32 checksum: %s", filename);
 		f.close()!;
 	}
 }
@@ -161,6 +164,9 @@ fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
 
 	// Append file to zip archive
 	w.add_buffer(filename, content)!;
+
+	// Release content mem
+	allocator::free(mem, content.ptr);
 
 	return false; // Continue to the next file/directory recusrively
 }

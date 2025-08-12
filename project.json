@@ -17,6 +17,10 @@
 		"zipar": {
 			"type": "executable",
 			"sources": [ "src/zipar/*" ]
+		},
+		"zipex": {
+			"type": "executable",
+			"sources": [ "src/zipex/*" ]
 		}
 	}
 }

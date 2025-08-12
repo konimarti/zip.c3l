@@ -105,4 +105,30 @@ fn void test_open_zip_archive() => @pool()
 	assert(z.len() == 6);
 }
 
+char[*] zip_writer_data = x`504b0304000000080000d26e0c5b340146be07000000070000000e000000
+646f63756d656e74312e74657874666f6f20626172504b03040000000800
+00d26e0c5b65c970920c0000000c0000000d000000646f63756d656e7432
+2e62696e000102030405060708090a0b504b01020000000000080000d26e
+0c5b340146be07000000070000000e000000000000000000000000000000
+0000646f63756d656e74312e74657874504b01020000000000080000d26e
+0c5b65c970920c0000000c0000000d000000000000000000000000003300
+0000646f63756d656e74322e62696e504b05060000000002000200770000006a0000000000`;
 
+import std::math, std::encoding::hex;
+fn void test_zip_writer() => @pool()
+{
+	ByteWriter bw;
+	bw.tinit();
+
+	ZipWriter archive = zip::tcreate(&bw)!!;
+	archive.add_buffer("document1.text", "foo bar")!!;
+	archive.add_buffer("document2.bin", math::iota(char[12])[..])!!;
+	archive.close()!!;
+
+	// We cannot directly compare the output to zip_writer_data because the
+	// timestamps are different.  So we just check the length and the end
+	// of record [last 22 bytes].
+	usz n = bw.index;
+	test::eq(zip_writer_data.len, n);
+	test::eq(zip_writer_data[n-22:22], bw.bytes[n-22:22]);
+}

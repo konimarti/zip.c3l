@@ -104,9 +104,6 @@ fn void? ZipWriter.add_buffer(&w, String filename, char[] content,
 	{
 		// TODO: should be the compressed data
 		w.writer.write(content)!;
-
-		// Release content mem
-		allocator::free(mem, content.ptr);
 	}
 
 	// Store ZipEntry since We need it for the central directory

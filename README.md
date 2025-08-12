@@ -64,12 +64,12 @@ fn void main()
 ```c3
 import archive::zip;
 
-fn void main()
+fn void main() => @pool()
 {
     File archive = file::open("archive.zip", "w")!!;
     defer (void) archive.close();
 
-    ZipWriter w = zip::create(&archive)!!;
+    ZipWriter w = zip::tcreate(&archive)!!;
     w.add_buffer("document.txt", "Hello World!")!!;
     w.close();
 }
@@ -82,12 +82,12 @@ fn void main()
 import archive::zip;
 import std::io;
 
-fn void main()
+fn void main() => @pool()
 {
     File archive = file::open("archive.zip", "w")!!;
     defer (void) archive.close();
 
-    ZipReader r = zip::open(&archive)!!;
+    ZipReader r = zip::topen(&archive)!!;
     foreach (entry : r) {
 	    io::printn(entry.filename);
     }
