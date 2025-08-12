@@ -37,7 +37,7 @@ git submodule update --init --recursive
 3. **Import in your C3 code:**
 Import the module where you need zip archive functionality:
 
-```c3
+```cpp
 import archive::zip;
 ```
 
@@ -46,7 +46,7 @@ import archive::zip;
 
 ### Extract All Files from a ZIP Archive
 
-```c3
+```cpp
 import archive::zip;
 
 fn void main()
@@ -61,7 +61,7 @@ fn void main()
 
 ### Create a ZIP Archive and Add Files
 
-```c3
+```cpp
 import archive::zip;
 
 fn void main() => @pool()
@@ -78,7 +78,7 @@ fn void main() => @pool()
 
 ### List Entries in a ZIP Archive
 
-```c3
+```cpp
 import archive::zip;
 import std::io;
 
@@ -95,7 +95,7 @@ fn void main() => @pool()
 }
 ```
 
-```c3
+```cpp
 import archive::zip;
 import std::io;
 
