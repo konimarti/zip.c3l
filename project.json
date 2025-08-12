@@ -14,9 +14,9 @@
 			"type": "executable",
 			"sources": [ "src/zipinfo/*" ]
 		},
-		"zippack": {
+		"zipar": {
 			"type": "executable",
-			"sources": [ "src/zippack/*" ]
+			"sources": [ "src/zipar/*" ]
 		}
 	}
 }
