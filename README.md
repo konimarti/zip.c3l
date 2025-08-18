@@ -1,4 +1,4 @@
-# zip.c3l — C3 Zip Archive Implementation
+# Zip Archives in C3
 
 ## Overview
 
