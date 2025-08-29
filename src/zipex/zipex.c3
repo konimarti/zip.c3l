@@ -18,7 +18,7 @@ fn int main(String[] args) => @pool()
 {
 	if (args.len < 3) return usage(args[0]);
 
-	File archive = file::open(args[1], "r")!!;
+	File archive = file::open(args[1], "rb")!!;
 	defer (void)archive.close();
 
 	zip::extract(&archive, args[2])!!;

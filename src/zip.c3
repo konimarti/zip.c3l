@@ -135,13 +135,22 @@ fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
 <*
  Archive a file or folder into a zip archive and write it to output.
 *>
-fn void? archive(String path, OutStream output) => @pool()
+fn void? archive(String base_dir, OutStream output) => @pool()
 {
-	ZipWriter p = (ZipWriter){}.init(tmem, path, output)!;
+	ZipWriter p = (ZipWriter){}.init(tmem, base_dir, output)!;
+
+	Path path = path::temp(base_dir)!;
+
+	// Add (empty) base directory
+	if (path::is_dir(path))
+	{
+		String s = format_filename(tmem, path.basename(), true);
+		p.add_buffer(s, {})!;
+	}
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record
-	path::temp(path).walk(&add_to_zip, &p)!;
+	path.walk(&add_to_zip, &p)!;
 
 	// Close ZipWriter will write central directory and the end record.
 	p.close()!;
@@ -155,12 +164,17 @@ fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
 {
 	if (!arg) return true; // Stop directory walk
 	ZipWriter *w = (ZipWriter*)arg;
+	String filename;
+	char[] content;
 
 	// Get file content
-	char[] content = is_dir ? {} : file::load_path(mem, path)!;
+	content = is_dir ? {} : file::load_path(mem, path)!;
 
-	// Prepare filename
-	String filename = prepare_filename(tmem, path, w.base_path, is_dir);
+	// Strip base_path from current file path
+	filename = strip_base(tmem, path, w.base_path);
+
+	// Format filename
+	filename = format_filename(tmem, filename, is_dir);
 
 	// Append file to zip archive
 	w.add_buffer(filename, content)!;
@@ -168,36 +182,44 @@ fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
 	// Release content mem
 	allocator::free(mem, content.ptr);
 
-	return false; // Continue to the next file/directory recusrively
+	return false; // Continue to the next file/directory recursively
+}
+
+fn String strip_base(Allocator allocator, Path file_path, Path base) => @pool()
+{
+	String parent;
+	if (try abs_base = base.absolute(tmem))
+	{
+		parent = (abs_base.parent() ?? abs_base).str_view();
+	}
+	else
+	{
+		parent = base.str_view();
+	}
+	return file_path.str_view().strip(parent).copy(allocator);
 }
 
 fn void test_zip_writer_filename() @test => @pool()
 {
 	String got;
 
-	got = prepare_filename(tmem,
-		path::temp("/tmp/foo"), path::temp("/tmp"), false)!!;
-	assert(got == "foo", "got: %s", got);
-
-	got = prepare_filename(tmem,
-		path::temp("/tmp/foo"), path::temp("/tmp/"), false)!!;
-	assert(got == "foo", "got: %s", got);
-
-	got = prepare_filename(tmem,
-		path::temp("/tmp/foo/"), path::temp("/tmp"), true)!!;
-	assert(got == "foo/", "got: %s", got);
-
-	got = prepare_filename(tmem,
-		path::temp("/tmp/foo/file"), path::temp("foo/"), false)!!;
-	assert(got == "file", "got: %s", got);
-
-	got = prepare_filename(tmem,
-		path::temp("/tmp/foo/bar/file"), path::temp("foo/"), false)!!;
-	assert(got == "bar/file", "got: %s", got);
-
-	got = prepare_filename(tmem,
-		path::temp("C:\\tmp\\foo\\bar"), path::temp("tmp"), false)!!;
+	got = format_filename(tmem, "foo/bar", false);
 	assert(got == "foo/bar", "got: %s", got);
+
+	got = format_filename(tmem, "/foo/bar", false);
+	assert(got == "foo/bar", "got: %s", got);
+
+	got = format_filename(tmem, "foo/bar", true);
+	assert(got == "foo/bar/", "got: %s", got);
+
+	got = format_filename(tmem, "foo/bar/", true);
+	assert(got == "foo/bar/", "got: %s", got);
+
+	got = format_filename(tmem, "foo", false);
+	assert(got == "foo", "got: %s", got);
+
+	got = format_filename(tmem, "foo", true);
+	assert(got == "foo/", "got: %s", got);
 }
 
 <*
@@ -215,52 +237,26 @@ fn void test_zip_writer_filename() @test => @pool()
        input, there is no file name field.
 
 *>
-fn String prepare_filename(Allocator allocator, Path path, Path base_path, bool is_dir) @local => @pool()
+fn String format_filename(Allocator allocator, String rel_path, bool is_dir) @local => @pool()
 {
-	String base = base_path.str_view();
-	String file = path.str_view();
-	String name;
-
-	if (try index = file.rindex_of(base))
-	{
-		name = file[index + base.len ..].tcopy();
-	}
-	else
-	{
-		name = file.tcopy();
-	}
-
-	// Strip volume
-	if (name.len >= 2)
-	{
-		switch (name[0])
-		{
-		case 'A'..'Z':
-		case 'a'..'z':
-			name = name[1] == ':' ? name[2..] : name;
-		default: break;
-		}
-	}
+	DString name = dstring::temp();
 
 	// Convert Win32 paths to forward slash path according to zip spec.
-	foreach (&c : name)
+	foreach (c : rel_path)
 	{
-		// TODO: Do we need to handle escaped separators?
-		if (path::is_win32_separator(*c))
+		if (path::is_win32_separator(c))
 		{
-			*c = path::PREFERRED_SEPARATOR_POSIX;
+			c = path::PREFERRED_SEPARATOR_POSIX;
 		}
+		name.append_char(c);
+	}
+
+	// Append separator if rel_path is a directory
+	if (is_dir && name[name.len()-1] != '/')
+	{
+		name.append_char('/');
 	}
 
 	// Remove leading path separator
-	name = name.trim_left("/");
-
-	// Append prefix path
-	DString tmp = dstring::temp(name);
-	if (is_dir)
-	{
-		tmp.append_char('/');
-	}
-
-	return tmp.copy_str(allocator);
+	return name.str_view().trim_left("/").copy(allocator);
 }
