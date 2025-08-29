@@ -132,6 +132,12 @@ fn void main() => @pool()
 
 Note that some functions that accept an allocator, often have an alternative using the temporary allocator.
 
+## Note for Windows user
+
+Zip archive files should be openend in binary mode (either "rb+" or "wb+").
+This ensures that `fseek` works correctly under Windows.
+[1](https://stackoverflow.com/questions/47256223/why-does-fseek-0-seek-cur-fail-on-windows).
+
 
 ## License
 

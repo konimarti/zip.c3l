@@ -36,7 +36,7 @@ OUTPUT
 
 fn void show_zip_info(String filename) => @pool()
 {
-	File f = file::open(filename, "r")!!;
+	File f = file::open(filename, "rb+")!!;
 	defer (void)f.close();
 
 	ZipReader reader = zip::topen(&f)!!;
