@@ -160,7 +160,7 @@ fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
 	char[] content = is_dir ? {} : file::load_path(mem, path)!;
 
 	// Prepare filename
-	String filename = prepare_filename(tmem, path, w.base_path);
+	String filename = prepare_filename(tmem, path, w.base_path, is_dir);
 
 	// Append file to zip archive
 	w.add_buffer(filename, content)!;
@@ -176,31 +176,71 @@ fn void test_zip_writer_filename() @test => @pool()
 	String got;
 
 	got = prepare_filename(tmem,
-		path::temp("/tmp/foo"), path::temp("/tmp"))!!;
-	assert(got == "tmp/foo", "got: %s", got);
+		path::temp("/tmp/foo"), path::temp("/tmp"), false)!!;
+	assert(got == "foo", "got: %s", got);
 
 	got = prepare_filename(tmem,
-		path::temp("tmp/bar"), path::temp("tmp"))!!;
-	assert(got == "tmp/bar", "got: %s", got);
+		path::temp("/tmp/foo"), path::temp("/tmp/"), false)!!;
+	assert(got == "foo", "got: %s", got);
 
 	got = prepare_filename(tmem,
-		path::temp("tmp\\foo\\bar"), path::temp("tmp"))!!;
-	assert(got == "tmp/foo/bar", "got: %s", got);
+		path::temp("/tmp/foo/"), path::temp("/tmp"), true)!!;
+	assert(got == "foo/", "got: %s", got);
 
 	got = prepare_filename(tmem,
-		path::temp("tmp\\foo\\bar"), path::temp("/"))!!;
-	assert(got == "tmp/foo/bar", "got: %s", got);
+		path::temp("/tmp/foo/file"), path::temp("foo/"), false)!!;
+	assert(got == "file", "got: %s", got);
+
+	got = prepare_filename(tmem,
+		path::temp("/tmp/foo/bar/file"), path::temp("foo/"), false)!!;
+	assert(got == "bar/file", "got: %s", got);
+
+	got = prepare_filename(tmem,
+		path::temp("C:\\tmp\\foo\\bar"), path::temp("tmp"), false)!!;
+	assert(got == "foo/bar", "got: %s", got);
 }
 
 <*
  Helper function to prepare zip-compatible filename. Called from
  `add_to_zip()`.
+
+ 4.4.17 file name: (Variable)
+
+       4.4.17.1 The name of the file, with optional relative path.
+       The path stored MUST NOT contain a drive or
+       device letter, or a leading slash.  All slashes
+       MUST be forward slashes '/' as opposed to
+       backwards slashes '\' for compatibility with Amiga
+       and UNIX file systems etc.  If input came from standard
+       input, there is no file name field.
+
 *>
-fn String prepare_filename(Allocator allocator, Path path, Path base_path) @local => @pool()
+fn String prepare_filename(Allocator allocator, Path path, Path base_path, bool is_dir) @local => @pool()
 {
-	String base = base_path.absolute(tmem)!!.str_view();
-	String name = path.str_view().strip(base).tcopy();
-	DString tmp = dstring::temp("");
+	String base = base_path.str_view();
+	String file = path.str_view();
+	String name;
+
+	if (try index = file.rindex_of(base))
+	{
+		name = file[index + base.len ..].tcopy();
+	}
+	else
+	{
+		name = file.tcopy();
+	}
+
+	// Strip volume
+	if (name.len >= 2)
+	{
+		switch (name[0])
+		{
+		case 'A'..'Z':
+		case 'a'..'z':
+			name = name[1] == ':' ? name[2..] : name;
+		default: break;
+		}
+	}
 
 	// Convert Win32 paths to forward slash path according to zip spec.
 	foreach (&c : name)
@@ -212,19 +252,12 @@ fn String prepare_filename(Allocator allocator, Path path, Path base_path) @loca
 		}
 	}
 
+	// Remove leading path separator
+	name = name.trim_left("/");
+
 	// Append prefix path
-	if (path::is_dir(base_path))
-	{
-		String top = base_path.basename().trim("/");
-		tmp.append_chars(top);
-		if (top.len) tmp.append_char('/');
-	}
-
-	// Append filename path (rebased from base_path)
-	tmp.append_chars(name.trim_left("/"));
-
-	// Append path separator if directory
-	if (path::is_dir(path) && !tmp.str_view().ends_with("/"))
+	DString tmp = dstring::temp(name);
+	if (is_dir)
 	{
 		tmp.append_char('/');
 	}
