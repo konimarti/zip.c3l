@@ -1,14 +1,8 @@
 <*
- This module makes it easy to read and write files in the ZIP/ZIP64 format [1]
- natively in C3, with a simple interface. It's especially useful for C3
- projects that need basic ZIP archiving functionality without relying on
- external dependencies or heavy native bindings.
-
- WinZip-based AE-x encryption [2] will be implemented later.
+ This module implements archiving functionality for the ZIP/ZIP64 format [1]
+ without relying on external dependencies.
 
  [1] https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
- [2] https://www.winzip.com/en/support/aes-encryption/
-
 *>
 module archive::zip;
 
