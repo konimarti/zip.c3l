@@ -13,7 +13,7 @@ external dependencies or heavy native bindings.
 - Read and extract files from ZIP archives.
 - Create new ZIP archives and add files.
 - Support ZIP and ZIP64 formats.
-- Pure C3 implementation (no external dependencies).
+- Pure C3 implementation without any external dependencies.
  
 ## Installation
 
@@ -51,7 +51,7 @@ import archive::zip;
 
 fn void main()
 {
-    File archive = file::open("archive.zip", "r")!!;
+    File archive = file::open("archive.zip", "rb")!!;
     defer (void) archive.close();
 
     zip::extract(&archive, "output/")!!;
@@ -66,11 +66,11 @@ import archive::zip;
 
 fn void main() => @pool()
 {
-    File archive = file::open("archive.zip", "w")!!;
+    File archive = file::open("archive.zip", "wb")!!;
     defer (void) archive.close();
 
     ZipWriter w = zip::tcreate(&archive)!!;
-    w.add_buffer("document.txt", "Hello World!")!!;
+    w.write_buffer("document.txt", "Hello World!")!!;
     w.close();
 }
 ```
@@ -84,31 +84,15 @@ import std::io;
 
 fn void main() => @pool()
 {
-    File archive = file::open("archive.zip", "w")!!;
+    File archive = file::open("archive.zip", "rb")!!;
     defer (void) archive.close();
 
     ZipReader r = zip::topen(&archive)!!;
     foreach (entry : r) {
 	    io::printn(entry.filename);
     }
-    r.close();
 }
 ```
-
-```cpp
-import archive::zip;
-import std::io;
-
-fn void main() => @pool()
-{
-    File archive = file::open("archive.zip", "w")!!;
-    defer (void) archive.close();
-
-    io::printn( zip::ls(tmem, &archive)!! );
-}
-```
-
-
 ## API Reference
 
 - `fn void? zip::extract(InStream archive, String folder)`: Extract all files in zip archive to a directory.
@@ -119,16 +103,17 @@ fn void main() => @pool()
 - `fn ZipReader? zip::open(Allocator allocator, InStream archive)`: Open an existing zip archive for reading.
 - `fn ZipEntry? ZipReader.get(usz index) @operator([])`: Get the entry at index.
 - `fn usz? ZipReader.len() @operator(len)`: Get number of entries.
-- `fn void ZipReader.close()`: Close the zip archive.
+- `fn void ZipReader.free()`: Free the resources.
 
 *ZipWriter*
 - `fn ZipWriter? zip::create(Allocator allocator, OutStream output)`: Create a new zip archive for writing.
-- `fn void? ZipWriter.add_buffer(String filename, char[] content, ZipCompressMethod method = COMPRESS_STORE)`: Add a file with the specified filename and content.
+- `fn void? ZipWriter.write_buffer(String filename, char[] content, ZipCompressMethod method = COMPRESS_STORE)`: Add a file with the specified filename and content.
 - `fn void ZipWriter.close()`: Close the zip archive and finalize changes.
+- `fn void ZipWriter.free()`: Free the resources.
 
 *ZipEntry*
-- `fn LimitReader? ZipEntry.compressed_data(InStream archive)`: Return the compressed data of a specific entry as a readable stream.
-- `fn usz? ZipEntry.extract_to(InStream archive, OutStream output, bool *checksum = null)`: Extract a specific entry to an output stream.
+- `fn LimitReader? ZipEntry.open_compressed(InStream archive)`: Return the compressed data of a specific entry as a readable stream.
+- `fn ExtractResult? ZipEntry.extract_to(OutStream output, InStream archive, bool verify_checksum = true)`: Extract a specific entry to an output stream.
 
 Note that some functions that accept an allocator, often have an alternative using the temporary allocator.
 
