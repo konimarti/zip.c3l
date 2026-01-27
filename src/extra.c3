@@ -42,10 +42,10 @@ faultdef INVALID_EXTRA_FIELD_LENGTH;
 *>
 fn char[]? ExtraFieldIterator.next(&self)
 {
-	if (self.index + 4 >= self.extra.len || self.extra.len < 4) return io::EOF?;
+	if (self.index + 4 >= self.extra.len || self.extra.len < 4) return io::EOF~;
 	ushort len = read_le_16(self.extra[self.index+2:2]) + 4;
 
-	if (self.index + len > self.extra.len) return INVALID_EXTRA_FIELD_LENGTH?;
+	if (self.index + len > self.extra.len) return INVALID_EXTRA_FIELD_LENGTH~;
 	char[] next = self.extra[self.index:len];
 
 	self.index += len;
@@ -65,7 +65,7 @@ fn char[]? find_extra_header(char[] extra, ushort id)
 	{
 		if (is_extra_header(data, id)) return data;
 	}
-	return NOT_FOUND?;
+	return NOT_FOUND~;
 }
 
 <*
@@ -106,7 +106,7 @@ fn void? Zip64ExtraField.unpack(&self, char[] extra)
 {
 	if (extra.len < 4 && (extra.len >= 2 && read_le_16(extra[0:2]) != ZIP64_EXTRA_HEADER))
 	{
-		return INVALID_ZIP64_EXTRA_FIELD?;
+		return INVALID_ZIP64_EXTRA_FIELD~;
 	}
 
 	usz len = read_le_16(extra[2:2]);
@@ -127,7 +127,7 @@ fn void? Zip64ExtraField.unpack(&self, char[] extra)
 
 fn void? Zip64ExtraField.pack(&self, char[] extra)
 {
-	// if (extra.len < 28 + 4) return BUF_ERROR?;
+	// if (extra.len < 28 + 4) return BUF_ERROR~;
 
 	ByteWriter *writer = (ByteWriter){}.init_with_buffer(extra);
 
@@ -167,7 +167,7 @@ fn void? UnicodePathExtraField.unpack(&f, char[] extra)
 	if (extra.len < 9 ||
 		(extra.len >= 2 && read_le_16(extra[0:2]) != UNICODE_PATH_HEADER))
 	{
-		return INVALID_UNICODE_PATH_EXTRA_FIELD?;
+		return INVALID_UNICODE_PATH_EXTRA_FIELD~;
 	}
 
 	f.header_id = read_le_16(extra[0:2]);
@@ -176,5 +176,5 @@ fn void? UnicodePathExtraField.unpack(&f, char[] extra)
 	f.crc32     = read_le_32(extra[5:4]);
 	f.filename  =    (String)extra[9..];
 
-	if (crc32::hash(f.filename) != f.crc32) return INVALID_CRC32_HASH?;
+	if (crc32::hash(f.filename) != f.crc32) return INVALID_CRC32_HASH~;
 }

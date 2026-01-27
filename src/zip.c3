@@ -65,7 +65,7 @@ fn ZipReader? topen(InStream archive) @inline => open(tmem, archive);
 fn void? extract(InStream archive, String folder) => @pool()
 {
 	Path base_folder = path::temp(folder)!;
-	if (!path::is_dir(base_folder)) return EXPECT_FOLDER?;
+	if (!path::is_dir(base_folder)) return EXPECT_FOLDER~;
 
 	ZipReader reader;
 	reader.tparse(archive)!;

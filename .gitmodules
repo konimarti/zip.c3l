@@ -1,3 +1,3 @@
-[submodule "lib/tinf.c3l"]
-	path = lib/tinf.c3l
-	url = http://github.com/konimarti/tinf.c3l
+[submodule "lib/compress.c3l"]
+	path = lib/compress.c3l
+	url = http://github.com/konimarti/compress.c3l

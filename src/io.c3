@@ -22,7 +22,7 @@ fn usz? ZipOutStream.write(&self,  char[] bytes) @dynamic
 
 fn void? ZipOutStream.write_byte(&self, char c) @dynamic
 {
-	if (catch err = self.w.write_byte(c)) return err?;
+	if (catch err = self.w.write_byte(c)) return err~;
 	self.written++;
 }
 
@@ -141,7 +141,7 @@ fn usz? find_signature_r(InStream in, char[4] sig)
 		}
 	}
 
-	return NOT_FOUND?;
+	return NOT_FOUND~;
 }
 
 <*
@@ -163,5 +163,5 @@ fn usz? find_next_signature(InStream in, char[4] sig)
 		}
 	}
 
-	return NOT_FOUND?;
+	return NOT_FOUND~;
 }

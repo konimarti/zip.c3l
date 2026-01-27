@@ -5,7 +5,7 @@ import std::time;
 import std::hash::crc32;
 import std::collections::list;
 
-import tinf::inflate;
+import compress::flate;
 
 <*
  ZipReader stores the metadata for a Zip archive. Metadata includes the
@@ -410,37 +410,33 @@ fn usz? ZipEntry.extract_to(&zf, InStream archive, OutStream output, bool *check
 {
 	char[] src, dst;
 
-	dst = mem::temp_array(char, zf.uncompress_size);
-
 	switch (zf.compress_method)
 	{
 	case COMPRESS_STORE:
 		assert(zf.compress_size == zf.uncompress_size,
 			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
 
-		// Read all data from limit reader
+		// Read all data from limit reader.
+		dst = mem::temp_array(char, zf.uncompress_size);
 		io::read_all(&&zf.compressed_data(archive), dst)!;
 
 	case COMPRESS_DEFLATE:
-		assert(zf.compress_size != zf.uncompress_size,
-			"COMPRESS_METHOD_DEFLATE: compressed is larger than uncompressed size?");
-
-		// Read all data from limit reader
+		// Read all data from limit reader.
 		src = mem::temp_array(char, zf.compress_size);
 		io::read_all(&&zf.compressed_data(archive), src)!;
 
-		// Uncompress data
-		inflate::uncompress(dst, src)!;
+		// Uncompress data.
+		dst = flate::uncompress(tmem, src)!;
 
 	case COMPRESS_BZIP2:
 	default:
-		return UNSUPPORTED_COMPRESSION_METHOD?;
+		return UNSUPPORTED_COMPRESSION_METHOD~;
 	}
 
-	// Verify checksum
+	// Verify checksum.
 	if (checksum) *checksum = crc32::hash(dst) == zf.crc32;
 
-	// Write data
+	// Write data.
 	return io::write_all(output, dst);
 }
 
@@ -483,9 +479,9 @@ fn void? Zip64EndRecord.unpack(&r, InStream in)
 {
 	char[56] buf;
 
-	if (in.read(buf[..])! != 56) return INVALID_END_RECORD?;
+	if (in.read(buf[..])! != 56) return INVALID_END_RECORD~;
 
-	if (buf[:4] != SIGNATURE_END_ZIP64[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_END_ZIP64[:4]) return SIGNATURE_MISMATCH~;
 
 	r.signature      = read_le_32(buf[ 0:4]);
 	r.record_size    = read_le_64(buf[ 4:8]);
@@ -514,9 +510,9 @@ fn void? Zip64EndLocator.unpack(&r, InStream in)
 {
 	char[20] buf;
 
-	if (in.read(buf[..])! != 20) return INVALID_END_RECORD?;
+	if (in.read(buf[..])! != 20) return INVALID_END_RECORD~;
 
-	if (buf[:4] != SIGNATURE_LOCATOR_ZIP64[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_LOCATOR_ZIP64[:4]) return SIGNATURE_MISMATCH~;
 
 	r.signature      = read_le_32(buf[ 0:4]);
 	r.disk_start     = read_le_32(buf[ 4:4]);
@@ -566,9 +562,9 @@ fn void? ZipEndRecord.unpack(&r, InStream in, Allocator allocator = mem) => @poo
 {
 	char[22] buf;
 
-	if (in.read(buf[..])! != 22) return INVALID_END_RECORD?;
+	if (in.read(buf[..])! != 22) return INVALID_END_RECORD~;
 
-	if (buf[:4] != SIGNATURE_END[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_END[:4]) return SIGNATURE_MISMATCH~;
 
 	r.signature   = read_le_32(buf[ 0:4]);
 	r.number_of_disk = read_le_16(buf[ 4:2]);
@@ -658,9 +654,9 @@ fn void? ZipCentralFileHeader.unpack(&c, InStream in, Allocator allocator = mem)
 {
 	char[46] buf;
 
-	if (in.read(buf[..])! != 46) return INVALID_CENTRAL_FILE_HEADER?;
+	if (in.read(buf[..])! != 46) return INVALID_CENTRAL_FILE_HEADER~;
 
-	if (buf[:4] != SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_CENTRAL[:4]) return SIGNATURE_MISMATCH~;
 
 	c.signature    = read_le_32(buf[ 0:4]);
 	c.version_used    = read_le_16(buf[ 4:2]);
@@ -734,9 +730,9 @@ fn void? ZipLocalFileHeader.unpack(&f, InStream in, Allocator allocator = mem) =
 {
 	char[30] buf;
 
-	if (in.read(buf[..])! != 30) return INVALID_LOCAL_FILE_HEADER?;
+	if (in.read(buf[..])! != 30) return INVALID_LOCAL_FILE_HEADER~;
 
-	if (buf[:4] != SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH?;
+	if (buf[:4] != SIGNATURE_LOCAL[:4]) return SIGNATURE_MISMATCH~;
 
 	f.signature       = read_le_32(buf[ 0:4]);
 	f.version_min     = read_le_16(buf[ 4:2]);
@@ -781,7 +777,7 @@ fn void? ZipDataDescriptor.unpack(&d, InStream in, bool zip64 = false)
 {
 	char[20] buf;
 	usz n = zip64 ? 20 : 12;
-	if (in.read(buf[:n])! != n) return INVALID_DATA_DESCRIPTOR?;
+	if (in.read(buf[:n])! != n) return INVALID_DATA_DESCRIPTOR~;
 
 	d.crc32 = read_le_32(buf[0:4]);
 
