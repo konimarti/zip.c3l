@@ -13,93 +13,38 @@ struct ZipOutStream (OutStream)
 
 fn ulong ZipOutStream.tell(&self) => self.written;
 
-fn usz? ZipOutStream.write(&self,  char[] bytes) @dynamic
+fn usz? ZipOutStream.write(&self, char[] bytes) @dynamic
 {
-	usz? n = self.w.write(bytes);
-	if (try n) self.written += n;
+	usz n = self.w.write(bytes)!;
+	self.written += n;
 	return n;
 }
 
 fn void? ZipOutStream.write_byte(&self, char c) @dynamic
 {
-	if (catch err = self.w.write_byte(c)) return err~;
+	self.w.write_byte(c)!;
 	self.written++;
 }
 
 <*
  Pack two bytes into a ushort (little-endian).
-
  @require p.len >= 2
 *>
-macro ushort read_le_16(char[] p)
-{
-	return ((ushort) p[0]) | ((ushort) p[1] << 8);
-}
-
+fn ushort read_le_16(char[] p) @inline => io::read_le_ushort(&&io::wrap_bytes(p))!!;
 <*
  Pack four bytes into an uint (little-endian).
-
  @require p.len >= 4
 *>
-macro uint read_le_32(char[] p)
-{
-	return ((uint) p[0]) |
-		((uint) p[1] << 8) |
-		((uint) p[2] << 16) |
-		((uint) p[3] << 24);
-}
-
+fn uint read_le_32(char[] p) @inline => io::read_le_uint(&&io::wrap_bytes(p))!!;
 <*
  Pack eight bytes into an ulong (little-endian).
-
  @require p.len >= 8
 *>
-macro ulong read_le_64(char[] p)
-{
-	return ((ulong) p[0]) |
-		((ulong) p[1] << 8) |
-		((ulong) p[2] << 16) |
-		((ulong) p[3] << 24) |
-		((ulong) p[4] << 32) |
-		((ulong) p[5] << 40) |
-		((ulong) p[6] << 48) |
-		((ulong) p[7] << 56);
-}
+fn ulong read_le_64(char[] p) @inline => io::read_le_ulong(&&io::wrap_bytes(p))!!;
 
-<*
- @require io::@is_outstream(stream)
-*>
-macro void? write_le_16(stream, ushort s)
-{
-	stream.write_byte((char)s)!;
-	stream.write_byte((char)(s >> 8))!;
-}
-<*
- @require io::@is_outstream(stream)
-*>
-macro void? write_le_32(stream, uint s)
-{
-	stream.write_byte((char)s)!;
-	stream.write_byte((char)(s >> 8))!;
-	stream.write_byte((char)(s >> 16))!;
-	stream.write_byte((char)(s >> 24))!;
-}
-
-<*
- @require io::@is_outstream(stream)
-*>
-macro void? write_le_64(stream, ulong s)
-{
-	stream.write_byte((char)s)!;
-	stream.write_byte((char)(s >> 8))!;
-	stream.write_byte((char)(s >> 16))!;
-	stream.write_byte((char)(s >> 24))!;
-	stream.write_byte((char)(s >> 32))!;
-	stream.write_byte((char)(s >> 40))!;
-	stream.write_byte((char)(s >> 48))!;
-	stream.write_byte((char)(s >> 56))!;
-	stream.write_byte((char)(s >> 56))!;
-}
+fn void? write_le_16(OutStream w, ushort s) @inline => io::write_le_short(w, s);
+fn void? write_le_32(OutStream w, uint s)   @inline => io::write_le_int(w, s);
+fn void? write_le_64(OutStream w, ulong s)  @inline => io::write_le_long(w, s);
 
 <*
  Read n bytes from f and return a String.
@@ -107,13 +52,13 @@ macro void? write_le_64(stream, ulong s)
 fn String? read_n(InStream f, usz n, Allocator allocator) @private => @pool()
 {
 	if (n == 0) return "";
-	char[] buf = mem::talloc_array(char, n);
+	char[] buf = allocator::alloc_array(allocator, char, n);
 	usz read = 0;
 	while (read < n)
 	{
 		read += f.read(buf[read : n - read])!;
 	}
-	return ((String)buf[:n]).copy(allocator);
+	return (String)buf[:n];
 }
 
 <*
