@@ -2,7 +2,7 @@
 
 ## Overview
 
-**`zip.c3l`** is a lightweight library for handling ZIP and ZIP64 archive files
+`zip.c3l` is a lightweight library for handling ZIP and ZIP64 archive files
 in [C3](https://c3-lang.org/). This package makes it easy to read and write ZIP
 files natively in C3, with a simple interface. It's especially useful for C3
 projects that need basic ZIP archiving functionality without relying on
@@ -17,7 +17,7 @@ external dependencies or heavy native bindings.
  
 ## Installation
 
-1. **Add to your project:**
+1. Add to your project:
 Clone or add `zip.c3l` as a submodule in your repository.
 
 ```sh
@@ -25,7 +25,7 @@ git submodule add https://github.com/konimarti/zip.c3l.git
 git submodule update --init --recursive
 ```
 
-2. *Update `project.json`:*
+2. Update `project.json`:
 
 ```json
 {
@@ -34,7 +34,7 @@ git submodule update --init --recursive
 }
 ```
 
-3. **Import in your C3 code:**
+3. Import in your C3 code:
 Import the module where you need zip archive functionality:
 
 ```cpp

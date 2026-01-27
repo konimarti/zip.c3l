@@ -9,15 +9,15 @@ struct ZipWriter
 {
 	Allocator    allocator;
 	Path         base_path;
-	ZipOutStream writer;
 	ZipEntryList entries;
+	ByteCounterStream writer;
 }
 
 fn ZipWriter*? ZipWriter.init(&self, Allocator allocator, String path, OutStream writer)
 {
 	self.allocator = allocator;
 	self.base_path = path::new(allocator, path)!;
-	self.writer    = (ZipOutStream){ writer, 0 };
+	self.writer    = (ByteCounterStream){ writer, 0 };
 	self.entries.init(allocator);
 	return self;
 }
@@ -143,3 +143,29 @@ fn void? ZipWriter.write_end_record(&self, usz offset)
 	 write_le_16(&self.writer, 0)!;
 }
 
+fn void? write_le_16(OutStream w, ushort s) @inline => io::write_le_short(w, s);
+fn void? write_le_32(OutStream w, uint s)   @inline => io::write_le_int(w, s);
+fn void? write_le_64(OutStream w, ulong s)  @inline => io::write_le_long(w, s);
+<*
+ Wrapped OutStream to provide number of written bytes.
+*>
+struct ByteCounterStream (OutStream)
+{
+	OutStream w;
+	ulong written;
+}
+
+fn ulong ByteCounterStream.tell(&self) => self.written;
+
+fn usz? ByteCounterStream.write(&self, char[] bytes) @dynamic
+{
+	usz n = self.w.write(bytes)!;
+	self.written += n;
+	return n;
+}
+
+fn void? ByteCounterStream.write_byte(&self, char c) @dynamic
+{
+	self.w.write_byte(c)!;
+	self.written++;
+}

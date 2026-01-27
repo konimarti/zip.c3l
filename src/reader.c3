@@ -417,12 +417,12 @@ fn bool ZipEntry.is_streaming(&zf) => zf.flag.streaming;
 <*
  Returns a LimitReader for the compressed (!) data of the ZipEntry.
  Do not close the LimitReader.
- @param [in] archive : "Zip archive file stream"
+ @param [in] file : "Zip archive file stream"
 *>
-fn LimitReader? ZipEntry.open_compressed(&zf, InStream archive)
+fn LimitReader? ZipEntry.open_compressed(&self, InStream file)
 {
-	archive.seek(zf.file_offset, Seek.SET)!;
-	return { archive, zf.compress_size };
+	file.seek(self.file_offset, Seek.SET)!;
+	return { file, self.compress_size };
 }
 
 struct ExtractResult
@@ -443,35 +443,29 @@ struct ExtractResult
 *>
 fn ExtractResult? ZipEntry.extract_to(&self, OutStream output, InStream file, bool verify_checksum = true) => @pool()
 {
-	char[] dest;
+	char[] dst;
 
 	switch (self.compress_method)
 	{
 	case COMPRESS_STORE:
 		assert(self.compress_size == self.uncompress_size,
 			"COMPRESS_METHOD_STORE: uncompressed and compressed sizes differ");
-		dest = mem::temp_array(char, self.uncompress_size);
-		io::read_all(&&self.open_compressed(file), dest)!;
+		dst = mem::temp_array(char, self.uncompress_size);
+		io::read_all(&&self.open_compressed(file), dst)!;
 
 	case COMPRESS_DEFLATE:
 		char[] src = mem::temp_array(char, self.compress_size);
 		io::read_all(&&self.open_compressed(file), src)!;
-		dest = flate::tuncompress(src)!;
+		dst = flate::tuncompress(src)!;
 
 	default:
 		return UNSUPPORTED_COMPRESSION~;
 	}
 
-	ExtractResult result;
-
-	if (verify_checksum)
-	{
-		result.checksum_ok = crc32::hash(dest) == self.crc32;
-	}
-
-	result.bytes = io::write_all(output, dest)!;
-
-	return result;
+	return {
+		.bytes = io::write_all(output, dst)!,
+		.checksum_ok = verify_checksum ? crc32::hash(dst) == self.crc32 : true,
+	};
 }
 
 <*
@@ -479,9 +473,9 @@ fn ExtractResult? ZipEntry.extract_to(&self, OutStream output, InStream file, bo
 *>
 struct ZipDigitalSignature
 {
-	uint 	signature;
-	ushort  data_size;
-	char[]  data;
+	uint   signature;
+	ushort data_size;
+	char[] data;
 }
 
 <*
@@ -495,18 +489,16 @@ struct ZipDigitalSignature
 *>
 struct Zip64EndRecord
 {
-	uint	  signature;
-	ulong 	  record_size;
-	ushort    version_made;
-	ushort    version_min;
-	uint      nr_disk;
-	uint      disk_start;
-	ulong     nr_records;
-	ulong     tot_nr_records;
-	ulong     size_bytes; 	  // size of central directory
-	ulong     rel_offset; 	  // offset to central directory (relative to start of archive)
-	// char[]    data;           // zip64 extensible data sector (header: 2 bytes, len: 4 bytes, data[len] ..)
-	// Allocator allocator;
+	uint   signature;
+	ulong  record_size;
+	ushort version_made;
+	ushort version_min;
+	uint   nr_disk;
+	uint   disk_start;
+	ulong  nr_records;
+	ulong  tot_nr_records;
+	ulong  size_bytes;     // Size of central directory
+	ulong  rel_offset;     // Offset to central directory (relative to start of archive)
 }
 
 fn void? Zip64EndRecord.unpack(&self, InStream file)
@@ -544,10 +536,10 @@ fn void? Zip64EndLocator.unpack(&self, InStream file)
 	fill_buffer(&buf, file) ?? INVALID_END_RECORD~!;
 	verify_signature(&buf, SIGNATURE_LOCATOR_ZIP64)!;
 
-	self.signature      = read_le_32(buf[ 0:4]);
-	self.disk_start     = read_le_32(buf[ 4:4]);
-	self.rel_offset     = read_le_64(buf[ 8:8]);
-	self.tot_disks      = read_le_32(buf[16:4]);
+	self.signature  = read_le_32(buf[ 0:4]);
+	self.disk_start = read_le_32(buf[ 4:4]);
+	self.rel_offset = read_le_64(buf[ 8:8]);
+	self.tot_disks  = read_le_32(buf[16:4]);
 }
 
 <*
@@ -577,12 +569,12 @@ fn void ZipEndRecord.free(&self)
 fn usz? ZipEndRecord.to_format(&self, Formatter *f) @dynamic
 {
 	usz n;
-	n += f.printf("magic num : %x\n", self.signature)!;
-	n += f.printf("records   : %d\n", self.nr_records)!;
-	n += f.printf("total     : %d\n", self.tot_nr_records)!;
-	n += f.printf("size      : %d\n", self.size_bytes)!;
-	n += f.printf("rel_offset: %d\n", self.rel_offset)!;
-	n += f.printf("comment   : %s\n", self.comment)!;
+	n += f.printf("Signature: %x\n", self.signature)!;
+	n += f.printf("Records  : %d\n", self.nr_records)!;
+	n += f.printf("Total    : %d\n", self.tot_nr_records)!;
+	n += f.printf("Size     : %d\n", self.size_bytes)!;
+	n += f.printf("Offset   : %d\n", self.rel_offset)!;
+	n += f.printf("Comment  : %s\n", self.comment)!;
 	return n;
 }
 
@@ -828,4 +820,85 @@ fn void? fill_buffer(char[] buf, InStream file) @inline @private
 fn void? verify_signature(char[] buf, char[4] signature) @inline @private
 {
 	if (buf[:4] != signature[:4]) return SIGNATURE_MISMATCH~;
+}
+
+<*
+ Pack two bytes into a ushort (little-endian).
+ @require p.len >= 2
+*>
+fn ushort read_le_16(char[] p) @inline => io::read_le_ushort(&&io::wrap_bytes(p))!!;
+<*
+ Pack four bytes into an uint (little-endian).
+ @require p.len >= 4
+*>
+fn uint read_le_32(char[] p) @inline => io::read_le_uint(&&io::wrap_bytes(p))!!;
+<*
+ Pack eight bytes into an ulong (little-endian).
+ @require p.len >= 8
+*>
+fn ulong read_le_64(char[] p) @inline => io::read_le_ulong(&&io::wrap_bytes(p))!!;
+
+<*
+ Read n bytes from f and return a String.
+*>
+fn String? read_string(Allocator allocator, InStream f, usz n) @private
+{
+	if (n == 0) return "";
+	char[] buf = allocator::alloc_array(allocator, char, n);
+	usz read = 0;
+	while (read < n)
+	{
+		read += f.read(buf[read : n - read])!;
+	}
+	return (String)buf[:n];
+}
+
+<*
+ Scan from the end of the file for signature.
+*>
+fn usz? find_signature_r(InStream in, char[4] sig)
+{
+	usz i, n, size, offset;
+	char[256] buf;
+
+	size = in.seek(offset, Seek.END)!;
+
+	offset = 0;
+	while (offset < size)
+	{
+		offset += 128;
+		if (offset > size) offset = size;
+		in.seek(-offset, Seek.END)!;
+		n = in.read(&buf)!;
+
+		// Scan for end record magic number
+		if (try loc = ((String)buf[:n]).index_of((String)sig[..]))
+		{
+			return size - offset + loc;
+		}
+	}
+
+	return NOT_FOUND~;
+}
+
+<*
+ Scan from the current file cursor for a signature.
+*>
+fn usz? find_next_signature(InStream in, char[4] sig)
+{
+	usz n;
+	char[256] buf;
+
+	while (try read = in.read(&buf) && read > 0)
+	{
+		n += read;
+
+		// Scan for Signature
+		if (try loc = ((String)buf[:read]).index_of((String)sig[..]))
+		{
+			return in.seek(0,Seek.CURSOR)! - read + loc;
+		}
+	}
+
+	return NOT_FOUND~;
 }
