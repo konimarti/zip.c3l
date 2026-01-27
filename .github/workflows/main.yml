@@ -7,41 +7,26 @@ on:
     branches: [ master ]
 
 jobs:
-
-  build-mac:
-    runs-on: macos-latest
+  build:
     strategy:
-      # Don't abort runners if a single one fails
-      fail-fast: false
-
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: ubuntu-latest
+            arch: x64
+          - os: windows-latest
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    name: Build
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
       - uses: radekm/setup-c3@v2
         with:
-          # version: v0.7.9
+          # version: v0.7.0
           version: latest-prerelease-tag
-      - uses: actions/setup-go@v4
-      - name: Compile and run test suite
-        run: |
-          c3c test
+      - shell: bash
+        run: c3c test
 
-  build-linux:
-    runs-on: ubuntu-latest
-    strategy:
-      # Don't abort runners if a single one fails
-      fail-fast: false
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: 'true'
-      - uses: radekm/setup-c3@v2
-        with:
-          # version: v0.7.9
-          version: latest-prerelease-tag
-      - uses: actions/setup-go@v4
-      - name: Compile and run test suite
-        run: |
-          c3c test
