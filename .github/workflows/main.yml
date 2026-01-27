@@ -11,12 +11,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
-            arch: arm64
           - os: ubuntu-latest
             arch: x64
-          - os: windows-latest
-            arch: x64
+          # - os: macos-latest
+          #   arch: arm64
+          # - os: windows-latest
+          #   arch: x64
     runs-on: ${{ matrix.os }}
     name: Build
     steps:
