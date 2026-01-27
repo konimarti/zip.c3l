@@ -49,7 +49,7 @@ fn void? write_le_64(OutStream w, ulong s)  @inline => io::write_le_long(w, s);
 <*
  Read n bytes from f and return a String.
 *>
-fn String? read_n(InStream f, usz n, Allocator allocator) @private => @pool()
+fn String? read_string(Allocator allocator, InStream f, usz n) @private
 {
 	if (n == 0) return "";
 	char[] buf = allocator::alloc_array(allocator, char, n);

@@ -9,7 +9,7 @@ fn void main(String[] args)
 		io::printfn(`
 NAME
 
-	zipinfo -- list detailed information about a ZIP archive
+	zipinfo - list detailed information about a ZIP archive
 
 SYNOPSIS
 
@@ -40,24 +40,11 @@ fn void show_zip_info(String filename) => @pool()
 	defer (void)f.close();
 
 	ZipReader reader = zip::topen(&f)!!;
-	defer reader.close();
+	defer reader.free();
 
-	// Print archive info
+	// Print archive info.
 	usz archive_len = f.seek(0, Seek.END) ?? 0;
 	io::printfn("Archive: %s", filename);
 	io::printfn("Zip file size: %d bytes, number of entries: %d", archive_len, reader.len());
-
-	// Print archive entries
-	double tot_comp, tot_uncomp;
-	foreach (i, entry : reader)
-	{
-		tot_comp += entry.compress_size;
-		tot_uncomp += entry.uncompress_size;
-		io::printfn("%04x %d %8d %s %s %s",
-			entry.rel_offset, entry.compress_method, entry.uncompress_size,
-			entry.date, entry.time, entry.filename);
-	}
-	io::printfn("%d files, %d bytes uncompressed, %d bytes compressed: %4.1f%%",
-		reader.len(), tot_uncomp, tot_comp, 100.0 * (1.0 - tot_comp / tot_uncomp));
-
+	io::printf("%s", reader);
 }

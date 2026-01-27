@@ -23,7 +23,7 @@ fn void test_read_end_records() => @pool()
 
 	// Parse record
 	ZipEndRecord r;
-	r.unpack(in)!!;
+	r.unpack(tmem, in)!!;
 
 	assert(r.signature == 0x06054b50,
 		"got: %d, but want: %d", r.signature, 0x06054b50);
@@ -121,8 +121,8 @@ fn void test_zip_writer() => @pool()
 	bw.tinit();
 
 	ZipWriter archive = zip::tcreate(&bw)!!;
-	archive.add_buffer("document1.text", "foo bar")!!;
-	archive.add_buffer("document2.bin", math::iota(char[12])[..])!!;
+	archive.write_buffer("document1.text", "foo bar")!!;
+	archive.write_buffer("document2.bin", math::iota(char[12])[..])!!;
 	archive.close()!!;
 
 	// We cannot directly compare the output to zip_writer_data because the

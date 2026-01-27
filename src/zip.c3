@@ -37,6 +37,7 @@ const ZipSignature SIGNATURE_DATA          = {0x50, 0x4b, 0x07, 0x08}; // option
 const ZipSignature SIGNATURE_DIGITAL_SIG   = {0x50, 0x4b, 0x05, 0x05};
 
 faultdef NOT_FOUND,
+	CORRUPT_FILE,
 	EXPECT_FOLDER,
 	INVALID_END_RECORD,
 	INVALID_CENTRAL_FILE_HEADER,
@@ -44,7 +45,7 @@ faultdef NOT_FOUND,
 	INVALID_DATA_DESCRIPTOR,
 	INVALID_CRC32_HASH,
 	SIGNATURE_MISMATCH,
-	UNSUPPORTED_COMPRESSION_METHOD,
+	UNSUPPORTED_COMPRESSION,
 	UNSUPPORTED_ZIP64;
 
 <*
@@ -54,7 +55,7 @@ faultdef NOT_FOUND,
 fn ZipReader? open(Allocator allocator, InStream archive)
 {
 	ZipReader reader;
-	reader.parse(allocator, archive)!;
+	reader.init(allocator, archive).parse()!;
 	return reader;
 }
 fn ZipReader? topen(InStream archive) @inline => open(tmem, archive);
@@ -68,13 +69,13 @@ fn void? extract(InStream archive, String folder) => @pool()
 	if (!path::is_dir(base_folder)) return EXPECT_FOLDER~;
 
 	ZipReader reader;
-	reader.tparse(archive)!;
+	reader.tinit(archive).parse()!;
 
 	String filename, path_str;
 	Path   path;
 	bool   is_directory, checksum;
 
-	foreach (entry : reader)
+	foreach (entry: reader)
 	{
 		filename = entry.filename;
 		is_directory = filename.ends_with("/");
@@ -91,28 +92,34 @@ fn void? extract(InStream archive, String folder) => @pool()
 		}
 		path::mkdir(path.dirname(), true)!;
 
-		io::printfn("Extracting %s to %s", filename, path);
-
 		// Extract file
 		File f = file::open(path.str_view(), "w")!;
-		entry.extract_to(archive, &f, &checksum)!;
-		if (!checksum) io::eprintfn("File with incorrect CRC32 checksum: %s", filename);
-		f.close()!;
+		defer (void)f.close();
+		ExtractResult result = entry.extract_to(&f, archive)!;
+		if (result.checksum_ok)
+		{
+			io::eprintfn("Extracted %8d bytes to %s.", result.bytes, path);
+		}
+		else
+		{
+			io::eprintfn("CRC32 checksum failed for %s", filename);
+		}
 	}
 }
+
 <*
  List the filenames in a zip archive.
 *>
 fn PathList? ls(Allocator allocator, InStream archive) => @pool()
 {
 	ZipReader reader;
-	reader.tparse(archive)!;
+	reader.tinit(archive).parse()!;
 
 	PathList list;
 	list.init(allocator);
 	defer catch list.free();
 
-	foreach (entry : reader)
+	foreach (entry: reader)
 	{
 		String path_str = path::normalize(entry.filename, PathEnv.POSIX)!;
 		Path path = path::new(allocator, path_str)!!;
@@ -128,7 +135,9 @@ fn PathList? tls(InStream archive) @inline => ls(tmem, archive);
 *>
 fn ZipWriter? create(Allocator allocator, OutStream output) => @pool()
 {
-	return (ZipWriter){}.init(allocator, {}, output);
+	ZipWriter writer;
+	writer.init(allocator, {}, output)!;
+	return writer;
 }
 fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
 
@@ -137,7 +146,8 @@ fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
 *>
 fn void? archive(String base_dir, OutStream output) => @pool()
 {
-	ZipWriter p = (ZipWriter){}.init(tmem, base_dir, output)!;
+	ZipWriter writer;
+	writer.init(tmem, base_dir, output)!;
 
 	Path path = path::temp(base_dir)!;
 
@@ -145,15 +155,15 @@ fn void? archive(String base_dir, OutStream output) => @pool()
 	if (path::is_dir(path))
 	{
 		String s = format_filename(tmem, path.basename(), true);
-		p.add_buffer(s, {})!;
+		writer.write_buffer(s, {})!;
 	}
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record
-	path.walk(&add_to_zip, &p)!;
+	path.walk(&add_to_zip, &writer)!;
 
 	// Close ZipWriter will write central directory and the end record.
-	p.close()!;
+	writer.close()!;
 }
 
 <*
@@ -169,6 +179,7 @@ fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
 
 	// Get file content
 	content = is_dir ? {} : file::load_path(mem, path)!;
+	defer allocator::free(mem, content.ptr);
 
 	// Strip base_path from current file path
 	filename = strip_base(tmem, path, w.base_path);
@@ -177,10 +188,8 @@ fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
 	filename = format_filename(tmem, filename, is_dir);
 
 	// Append file to zip archive
-	w.add_buffer(filename, content)!;
-
-	// Release content mem
-	allocator::free(mem, content.ptr);
+	ZipCompressMethod method = content.len < 32 ? COMPRESS_STORE : COMPRESS_DEFLATE;
+	w.write_buffer(filename, content, method)!;
 
 	return false; // Continue to the next file/directory recursively
 }
