@@ -1,6 +1,5 @@
 <*
- This module implements archiving functionality for the ZIP/ZIP64 format [1]
- without relying on external dependencies.
+ This module provides archiving functionality for the ZIP/ZIP64 format [1].
 
  [1] https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT
 *>
@@ -90,38 +89,14 @@ fn void? extract(InStream archive, String folder) => @pool()
 		File f = file::open(path.str_view(), "w")!;
 		defer (void)f.close();
 		ExtractResult result = entry.extract_to(&f, archive)!;
-		if (result.checksum_ok)
+		String verb = "inflating";
+		if (entry.compress_method == COMPRESS_STORE)
 		{
-			io::eprintfn("Extracted %8d bytes to %s.", result.bytes, path);
+			verb = entry.uncompress_size ? "extracting" : "creating";
 		}
-		else
-		{
-			io::eprintfn("CRC32 checksum failed for %s", filename);
-		}
+		io::eprintfn("%11s:  %s %s", verb, filename, !result.checksum_ok ? "(CRC32 checksum failed)" : "");
 	}
 }
-
-<*
- List the filenames in a zip archive.
-*>
-fn PathList? ls(Allocator allocator, InStream archive) => @pool()
-{
-	ZipReader reader;
-	reader.tinit(archive).parse()!;
-
-	PathList list;
-	list.init(allocator);
-	defer catch list.free();
-
-	foreach (entry: reader)
-	{
-		String path_str = path::normalize(entry.filename, PathEnv.POSIX)!;
-		Path path = path::new(allocator, path_str)!!;
-		list.push(path);
-	}
-	return list;
-}
-fn PathList? tls(InStream archive) @inline => ls(tmem, archive);
 
 <*
  Create a zip archive. Returns an empty ZipWriter. Add files to the it.  Close

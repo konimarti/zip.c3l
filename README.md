@@ -13,7 +13,7 @@ external dependencies or heavy native bindings.
 - Read and extract files from ZIP archives.
 - Create new ZIP archives and add files.
 - Support ZIP and ZIP64 formats.
-- Pure C3 implementation without any external dependencies.
+- C3 implementation without any external dependencies.
  
 ## Installation
 
@@ -44,39 +44,7 @@ import archive::zip;
 
 ## Usage Examples
 
-### Extract All Files from a ZIP Archive
-
-```cpp
-import archive::zip;
-
-fn void main()
-{
-    File archive = file::open("archive.zip", "rb")!!;
-    defer (void) archive.close();
-
-    zip::extract(&archive, "output/")!!;
-}
-```
-
-
-### Create a ZIP Archive and Add Files
-
-```cpp
-import archive::zip;
-
-fn void main() => @pool()
-{
-    File archive = file::open("archive.zip", "wb")!!;
-    defer (void) archive.close();
-
-    ZipWriter w = zip::tcreate(&archive)!!;
-    w.write_buffer("document.txt", "Hello World!")!!;
-    w.close();
-}
-```
-
-
-### List Entries in a ZIP Archive
+### Read a ZIP archive
 
 ```cpp
 import archive::zip;
@@ -84,11 +52,59 @@ import std::io;
 
 fn void main() => @pool()
 {
-    File archive = file::open("archive.zip", "rb")!!;
-    defer (void) archive.close();
+    File f = file::open("archive.zip", "rb")!!;
+    defer (void) f.close();
 
-    ZipReader r = zip::topen(&archive)!!;
-    foreach (entry : r) {
+    ZipReader reader = zip::topen(&f)!!;
+    io::printfn(reader);
+}
+```
+
+### Extract files to a folder
+
+```cpp
+import archive::zip;
+
+fn void main()
+{
+    File f = file::open("archive.zip", "rb")!!;
+    defer (void) f.close();
+
+    zip::extract(&f, "output/")!!;
+}
+```
+
+
+### Create a ZIP archive and add files
+
+```cpp
+import archive::zip;
+
+fn void main() => @pool()
+{
+    File f = file::open("archive.zip", "wb")!!;
+    defer (void) f.close();
+
+    ZipWriter w = zip::tcreate(&f)!!;
+    w.write_buffer("document.txt", "Hello World!")!!;
+    w.close();
+}
+```
+
+### List all filenames
+
+```cpp
+import archive::zip;
+import std::io;
+
+fn void main() => @pool()
+{
+    File f = file::open("archive.zip", "rb")!!;
+    defer (void) f.close();
+
+    ZipReader reader = zip::topen(&f)!!;
+    foreach (entry : reader)
+    {
 	    io::printn(entry.filename);
     }
 }
@@ -97,7 +113,6 @@ fn void main() => @pool()
 
 - `fn void? zip::extract(InStream archive, String folder)`: Extract all files in zip archive to a directory.
 - `fn void? zip::archive(String path, OutStream output)`: Archive a file or folder to an output stream.
-- `fn PathList? zip::ls(Allocator allocator, InStream archive)`: List files in the zip archive.
 
 *ZipReader*
 - `fn ZipReader? zip::open(Allocator allocator, InStream archive)`: Open an existing zip archive for reading.
