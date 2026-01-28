@@ -119,17 +119,19 @@ fn void? archive(String base_dir, OutStream output) => @pool()
 	ZipWriter writer;
 	writer.init(tmem, output)!;
 
+	Path cwd = path::tcwd()!;
 	Path path = path::temp(base_dir)!;
 
 	// Add (empty) base directory
 	if (path::is_dir(path))
 	{
-		String s = format_filename(tmem, path.basename(), true);
-		writer.write_buffer(s, {})!;
+		String name = strip_base(tmem, path, cwd);
+		name = format_filename(tmem, name, true);
+		writer.write_buffer(name, {})!;
 	}
 
 	ZipDirectoryWalker walker;
-	walker.init(&writer, path);
+	walker.init(&writer, cwd);
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record
@@ -200,18 +202,9 @@ fn bool? add_to_zip(Path current_path, bool is_dir, void* arg) @private => @pool
 	return false; // Continue to the next file/directory recursively
 }
 
-fn String strip_base(Allocator allocator, Path file_path, Path base) => @pool()
+fn String strip_base(Allocator allocator, Path file_path, Path base) @inline
 {
-	String parent;
-	if (try abs_base = base.absolute(tmem))
-	{
-		parent = (abs_base.parent() ?? abs_base).str_view();
-	}
-	else
-	{
-		parent = base.str_view();
-	}
-	return file_path.str_view().strip(parent).copy(allocator);
+	return file_path.str_view().strip(base.str_view()).copy(allocator);
 }
 
 fn void test_zip_writer_filename() @test => @pool()
