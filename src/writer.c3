@@ -8,15 +8,13 @@ alias ZipEntryList = List { ZipEntry };
 struct ZipWriter
 {
 	Allocator    allocator;
-	Path         base_path;
 	ZipEntryList entries;
 	ByteCounterStream writer;
 }
 
-fn ZipWriter*? ZipWriter.init(&self, Allocator allocator, String path, OutStream writer)
+fn ZipWriter*? ZipWriter.init(&self, Allocator allocator, OutStream writer)
 {
 	self.allocator = allocator;
-	self.base_path = path::new(allocator, path)!;
 	self.writer    = (ByteCounterStream){ writer, 0 };
 	self.entries.init(allocator);
 	return self;
@@ -31,13 +29,12 @@ fn void? ZipWriter.close(&self)
 		self.write_central_directory_header(entry)!;
 	}
 
-	// And finally the End of Directory Record
+	// And finally the End of Directory Record.
 	self.write_end_record(offset_directory)!;
 }
 
 fn void ZipWriter.free(&self)
 {
-	self.base_path.free();
 	foreach (entry: self.entries) entry.free();
 	self.entries.free();
 	*self = {};
@@ -61,7 +58,8 @@ fn void? ZipWriter.write_buffer(&self, String filename, char[] content,
 	}
 
 	ZipEntry entry;
-	entry.init_with_buffer(self.allocator, filename, content, compressed, compress_method)!;
+	entry.init_with_buffer(self.allocator, filename, content,
+		compressed, compress_method)!;
 
 	// Store local date and time.
 	entry.set_date_time(datetime::now().to_local());

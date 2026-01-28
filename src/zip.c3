@@ -105,7 +105,7 @@ fn void? extract(InStream archive, String folder) => @pool()
 fn ZipWriter? create(Allocator allocator, OutStream output) => @pool()
 {
 	ZipWriter writer;
-	writer.init(allocator, {}, output)!;
+	writer.init(allocator, output)!;
 	return writer;
 }
 fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
@@ -116,7 +116,7 @@ fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
 fn void? archive(String base_dir, OutStream output) => @pool()
 {
 	ZipWriter writer;
-	writer.init(tmem, base_dir, output)!;
+	writer.init(tmem, output)!;
 
 	Path path = path::temp(base_dir)!;
 
@@ -127,38 +127,56 @@ fn void? archive(String base_dir, OutStream output) => @pool()
 		writer.write_buffer(s, {})!;
 	}
 
+	ZipDirectoryWalker walker;
+	walker.init(&writer, path);
+
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record
-	path.walk(&add_to_zip, &writer)!;
+	path.walk(&add_to_zip, &walker)!;
 
 	// Close ZipWriter will write central directory and the end record.
 	writer.close()!;
+}
+
+struct ZipDirectoryWalker
+{
+	ZipWriter *writer;
+	Path      base_path;
+}
+
+fn void ZipDirectoryWalker.init(&self, ZipWriter *w, Path start_dir)
+{
+	*self = { .writer = w, .base_path = start_dir };
 }
 
 <*
  Helper function for the walking the directory tree in `zip::archive()`.
  It is called for every file or directory that is encountered.
 *>
-fn bool? add_to_zip(Path path, bool is_dir, void* arg) @private => @pool()
+fn bool? add_to_zip(Path current_path, bool is_dir, void* arg) @private => @pool()
 {
 	if (!arg) return true; // Stop directory walk
-	ZipWriter *w = (ZipWriter*)arg;
-	String filename;
+
+	// Cast directory walker.
+	ZipDirectoryWalker *walker = (ZipDirectoryWalker*)arg;
+
+	// Get file content.
 	char[] content;
+	if (!is_dir)
+	{
+		content = file::load_path(mem, current_path)!;
+		defer allocator::free(mem, content.ptr);
+	}
 
-	// Get file content
-	content = is_dir ? {} : file::load_path(mem, path)!;
-	defer allocator::free(mem, content.ptr);
+	// Strip base_path from current file path.
+	String filename = strip_base(tmem, current_path, walker.base_path);
 
-	// Strip base_path from current file path
-	filename = strip_base(tmem, path, w.base_path);
-
-	// Format filename
+	// Format filename.
 	filename = format_filename(tmem, filename, is_dir);
 
 	// Append file to zip archive
 	ZipCompressMethod method = content.len < 32 ? COMPRESS_STORE : COMPRESS_DEFLATE;
-	w.write_buffer(filename, content, method)!;
+	walker.writer.write_buffer(filename, content, method)!;
 
 	return false; // Continue to the next file/directory recursively
 }
