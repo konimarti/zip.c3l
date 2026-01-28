@@ -122,7 +122,7 @@ fn void main() => @pool()
 
 *ZipWriter*
 - `fn ZipWriter? zip::create(Allocator allocator, OutStream output)`: Create a new zip archive for writing.
-- `fn void? ZipWriter.write_buffer(String filename, char[] content, ZipCompressMethod method = COMPRESS_STORE)`: Add a file with the specified filename and content.
+- `fn ZipEntry? ZipWriter.write_buffer(String filename, char[] content, ZipCompressMethod method = COMPRESS_STORE)`: Add a file with the specified filename and content.
 - `fn void ZipWriter.close()`: Close the zip archive and finalize changes.
 - `fn void ZipWriter.free()`: Free the resources.
 

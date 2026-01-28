@@ -73,28 +73,29 @@ fn void? extract(InStream archive, String folder) => @pool()
 		filename = entry.filename;
 		is_directory = filename.ends_with("/");
 
-		// Normalize path from UNIX sep to whatever is used
+		// Normalize path from UNIX sep to whatever is used.
 		path_str = path::normalize(filename, PathEnv.POSIX)!;
 		path = base_folder.tappend(path_str)!;
 
-		// Build directory structure
+		// Build directory structure and extract file.
+		String verb, err;
 		if (is_directory)
 		{
 			path::mkdir(path, true)!;
-			continue;
+			verb = "creating";
 		}
-		path::mkdir(path.dirname(), true)!;
-
-		// Extract file
-		File f = file::open(path.str_view(), "w")!;
-		defer (void)f.close();
-		ExtractResult result = entry.extract_to(&f, archive)!;
-		String verb = "inflating";
-		if (entry.compress_method == COMPRESS_STORE)
+		else
 		{
-			verb = entry.uncompress_size ? "extracting" : "creating";
+			path::mkdir(path.dirname(), true)!;
+			File f = file::open(path.str_view(), "w")!;
+			defer (void)f.close();
+			ExtractResult result = entry.extract_to(&f, archive)!;
+			verb = entry.compress_method == COMPRESS_STORE ?
+				"extracting" : "inflating";
+			if (!result.checksum_ok) err = "bad crc";
 		}
-		io::eprintfn("%11s:  %s %s", verb, filename, !result.checksum_ok ? "(CRC32 checksum failed)" : "");
+
+		io::eprintfn("%11s:  %s %s", verb, filename, err);
 	}
 }
 
@@ -142,11 +143,12 @@ struct ZipDirectoryWalker
 {
 	ZipWriter *writer;
 	Path      base_path;
+	bool      verbose;
 }
 
-fn void ZipDirectoryWalker.init(&self, ZipWriter *w, Path start_dir)
+fn void ZipDirectoryWalker.init(&self, ZipWriter *w, Path start_dir, bool verbose = true)
 {
-	*self = { .writer = w, .base_path = start_dir };
+	*self = { .writer = w, .base_path = start_dir, .verbose = verbose };
 }
 
 <*
@@ -162,11 +164,7 @@ fn bool? add_to_zip(Path current_path, bool is_dir, void* arg) @private => @pool
 
 	// Get file content.
 	char[] content;
-	if (!is_dir)
-	{
-		content = file::load_path(mem, current_path)!;
-		defer allocator::free(mem, content.ptr);
-	}
+	if (!is_dir) content = file::load_path(mem, current_path)!;
 
 	// Strip base_path from current file path.
 	String filename = strip_base(tmem, current_path, walker.base_path);
@@ -176,7 +174,28 @@ fn bool? add_to_zip(Path current_path, bool is_dir, void* arg) @private => @pool
 
 	// Append file to zip archive
 	ZipCompressMethod method = content.len < 32 ? COMPRESS_STORE : COMPRESS_DEFLATE;
-	walker.writer.write_buffer(filename, content, method)!;
+	ZipEntry entry = walker.writer.write_buffer(filename, content, method)!;
+
+	double ratio = entry.uncompress_size > 0 ?
+		100.0 * (1.0 - (double)entry.compress_size / entry.uncompress_size) : 0.0;
+
+	String comp_info;
+	switch (method)
+	{
+		case COMPRESS_STORE:
+			comp_info = string::tformat(" (stored %.0f%%)", ratio);
+		case COMPRESS_DEFLATE:
+			comp_info = string::tformat(" (deflated %.0f%%)", ratio);
+		default:
+			comp_info = "";
+	}
+
+	if (walker.verbose)
+	{
+		io::printfn("  adding: %s%s", filename, comp_info);
+	}
+
+	if (content.ptr) allocator::free(mem, content.ptr);
 
 	return false; // Continue to the next file/directory recursively
 }

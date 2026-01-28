@@ -46,7 +46,7 @@ fn void ZipWriter.free(&self)
  The caller of this function should ensure that the filename follows the zip
  specification (no leading slash and trailing slash for directories).
 *>
-fn void? ZipWriter.write_buffer(&self, String filename, char[] content,
+fn ZipEntry? ZipWriter.write_buffer(&self, String filename, char[] content,
 	ZipCompressMethod compress_method = COMPRESS_STORE)
 {
 	char[] compressed;
@@ -77,13 +77,15 @@ fn void? ZipWriter.write_buffer(&self, String filename, char[] content,
 	entry.file_offset = self.writer.tell();
 
 	// Only write content if it is not a directory and if there is data.
-	if (content.len > 0 && compressed.len > 0)
+	if (compressed.len > 0)
 	{
 		self.writer.write(compressed)!;
 	}
 
 	// Store ZipEntry since We need it for the central directory
 	self.entries.push(entry);
+
+	return entry;
 }
 
 fn void? ZipWriter.write_local_file_header(&self, ZipEntry *entry)

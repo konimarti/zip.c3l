@@ -21,7 +21,7 @@ fn int main(String[] args) => @pool()
 {
 	if (args.len < 3) return usage();
 
-	File output = file::open(args[1], "wb+")!!;
+	File output = file::open(args[1], "w")!!;
 	defer (void)output.close();
 
 	zip::archive(args[2], &output)!!;
