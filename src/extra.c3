@@ -1,16 +1,15 @@
 module archive::zip;
+import std::io, std::hash::crc32;
 
-import std::io;
-import std::hash::crc32;
-
-faultdef INVALID_ZIP64_EXTRA_FIELD,
-	INVALID_UNICODE_PATH_EXTRA_FIELD;
+faultdef INVALID_EXTRA_FIELD_LENGTH,
+	 INVALID_ZIP64_EXTRA_FIELD,
+	 INVALID_UNICODE_PATH_EXTRA_FIELD;
 
 const ushort ZIP64_EXTRA_HEADER  = 0x0001;
 const ushort UNICODE_PATH_HEADER = 0x7075;
 
 <*
- Iterate through the extra fields of a Local File Header.
+ Iterator over the extra fields of a Local File Header.
 
  4.5.1 In order to allow different programs and different types
  of information to be stored in the 'extra' field in .ZIP
@@ -35,41 +34,47 @@ struct ExtraFieldIterator
 	usz    index;
 }
 
-faultdef INVALID_EXTRA_FIELD_LENGTH;
 
 <*
  Returns the next extra block.
 *>
 fn char[]? ExtraFieldIterator.next(&self)
 {
-	if (self.index + 4 >= self.extra.len || self.extra.len < 4) return io::EOF~;
+	if (self.index + 4 >= self.extra.len || self.extra.len < 4)
+	{
+		return io::EOF~;
+	}
+
 	ushort len = read_le_16(self.extra[self.index+2:2]) + 4;
+	if (self.index + len > self.extra.len)
+	{
+		return INVALID_EXTRA_FIELD_LENGTH~;
+	}
 
-	if (self.index + len > self.extra.len) return INVALID_EXTRA_FIELD_LENGTH~;
 	char[] next = self.extra[self.index:len];
-
 	self.index += len;
 
 	return next;
 }
 
 <*
- Find specific header and return it.
+ Find header with header_id in extra array and return the entire data block (header
+ and corresponding data block).
 
- @!return NOT_FOUND
+ @return? NOT_FOUND
 *>
-fn char[]? find_extra_header(char[] extra, ushort id)
+fn char[]? find_extra_header(char[] extra, ushort header_id)
 {
 	ExtraFieldIterator it = { extra, 0 };
 	while (try data = it.next())
 	{
-		if (is_extra_header(data, id)) return data;
+		if (is_extra_header(data, header_id)) return data;
 	}
 	return NOT_FOUND~;
 }
 
 <*
- Checks if data block starts with header_id
+ Return true if data block starts with header_id.
 *>
 fn bool is_extra_header(char[] data, ushort header_id) @inline
 {
@@ -104,17 +109,16 @@ struct Zip64ExtraField
 
 fn void? Zip64ExtraField.unpack(&self, char[] extra)
 {
-	if (extra.len < 4 && (extra.len >= 2 && read_le_16(extra[0:2]) != ZIP64_EXTRA_HEADER))
+	if (extra.len < 4 || !is_extra_header(extra, ZIP64_EXTRA_HEADER))
 	{
 		return INVALID_ZIP64_EXTRA_FIELD~;
 	}
-
-	usz len = read_le_16(extra[2:2]);
 
 	self.header_id       = read_le_16(extra[ 0:2]);
 	self.data_size       = read_le_16(extra[ 2:2]);
 	self.uncompress_size = read_le_64(extra[ 4:8]);
 
+	usz len = self.data_size;
 	if (len < 16) return;
 	self.compress_size   = read_le_64(extra[12:8]);
 
@@ -127,15 +131,16 @@ fn void? Zip64ExtraField.unpack(&self, char[] extra)
 
 fn void? Zip64ExtraField.pack(&self, char[] extra)
 {
-	// if (extra.len < 28 + 4) return BUF_ERROR~;
-
 	ByteWriter *writer = (ByteWriter){}.init_with_buffer(extra);
-
 	write_le_16(writer, self.header_id)!;
 	write_le_16(writer, self.data_size)!;
 	write_le_64(writer, self.uncompress_size)!;
+	usz len = self.data_size;
+	if (len < 16) return;
 	write_le_64(writer, self.compress_size)!;
+	if (len < 24) return;
 	write_le_64(writer, self.rel_offset)!;
+	if (len < 32) return;
 	write_le_32(writer, self.number)!;
 }
 
@@ -162,19 +167,18 @@ struct UnicodePathExtraField
 	String filename; 	// UnicodeName
 }
 
-fn void? UnicodePathExtraField.unpack(&f, char[] extra)
+fn void? UnicodePathExtraField.unpack(&self, char[] extra)
 {
-	if (extra.len < 9 ||
-		(extra.len >= 2 && read_le_16(extra[0:2]) != UNICODE_PATH_HEADER))
+	if (extra.len < 9 || !is_extra_header(extra, UNICODE_PATH_HEADER))
 	{
 		return INVALID_UNICODE_PATH_EXTRA_FIELD~;
 	}
 
-	f.header_id = read_le_16(extra[0:2]);
-	f.data_size = read_le_16(extra[2:2]);
-	f.version   =            extra[4];
-	f.crc32     = read_le_32(extra[5:4]);
-	f.filename  =    (String)extra[9..];
+	self.header_id = read_le_16(extra[0:2]);
+	self.data_size = read_le_16(extra[2:2]);
+	self.version   =            extra[4];
+	self.crc32     = read_le_32(extra[5:4]);
+	self.filename  =    (String)extra[9..];
 
-	if (crc32::hash(f.filename) != f.crc32) return INVALID_CRC32_HASH~;
+	if (crc32::hash(self.filename) != self.crc32) return INVALID_CRC32_HASH~;
 }

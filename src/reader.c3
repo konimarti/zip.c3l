@@ -270,7 +270,7 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 {
 	self.allocator = allocator;
 
-	// Data from Local File Header
+	// From Local File Header
 	self.version_min        = local_header.version_min;
 	self.flag               = local_header.flag;
 	self.compress_method    = local_header.compress_method;
@@ -286,10 +286,10 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	{
 		self.filename = local_header.filename.copy(allocator);;
 	}
-	else if (try block = find_extra_header(self.extra, UNICODE_PATH_HEADER))
+	else if (try chunk = find_extra_header(self.extra, UNICODE_PATH_HEADER))
 	{
 		UnicodePathExtraField unicode_extra;
-		unicode_extra.unpack(block)!;
+		unicode_extra.unpack(chunk)!;
 		self.filename = unicode_extra.filename.copy(allocator);
 	}
 	else
@@ -297,27 +297,28 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 		self.filename = local_header.filename.copy(allocator);
 	}
 
-	// Data from Central Directory Header
+	// From Central Directory Header
 	self.version_used  = central_header.version_used;
 	self.internal_attr = central_header.internal_attr;
 	self.external_attr = central_header.external_attr;
 	self.rel_offset    = central_header.rel_offset;
-	self.file_offset   = (ulong)central_header.rel_offset + 30 + local_header.filename_len + local_header.extra_len;
+	self.file_offset   = (ulong)central_header.rel_offset + 30
+		+ local_header.filename_len + local_header.extra_len;
 
-	// Check for ZIP64 and replace the corresponding field.
+	// If in ZIP64 format, replace the corresponding field.
 	if (self.is_zip64())
 	{
-		if (try block = find_extra_header(self.extra, ZIP64_EXTRA_HEADER))
+		if (try chunk = find_extra_header(self.extra, ZIP64_EXTRA_HEADER))
 		{
 			Zip64ExtraField zip64_extra;
-			zip64_extra.unpack(block)!;
+			zip64_extra.unpack(chunk)!;
 			if (self.compress_size   == 0xFF_FF_FF_FF) self.compress_size   = zip64_extra.compress_size;
 			if (self.uncompress_size == 0xFF_FF_FF_FF) self.uncompress_size = zip64_extra.uncompress_size;
 			if (self.rel_offset      == 0xFF_FF_FF_FF) self.rel_offset      = zip64_extra.rel_offset;
 		}
 	}
 
-	// Data from Data Descriptor (if needed).
+	// From Data Descriptor (if needed).
 	if (self.flag.streaming)
 	{
 		self.crc32           = data_descriptor.crc32;
@@ -328,10 +329,10 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	return self;
 }
 
-// TODO: Check if init_with_buffer is zip64 compatible.
 fn ZipEntry*? ZipEntry.init_with_buffer(&self, Allocator allocator, String filename,
 	char[] content, char[] compressed, ZipCompressMethod compress_method = COMPRESS_STORE)
 {
+	// TODO: Is this zip64 compatible?
 	self.allocator       = allocator;
 	self.version_min     = 0; 			// TODO: What's the minimum version?
 	self.flag.language   = true; 			// We are only using utf-8 strings
