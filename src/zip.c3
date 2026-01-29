@@ -92,7 +92,11 @@ fn void? extract(InStream archive, String folder) => @pool()
 			ExtractResult result = entry.extract_to(&f, archive)!;
 			verb = entry.compress_method == COMPRESS_STORE ?
 				"extracting" : "inflating";
-			if (!result.checksum_ok) err = "bad crc";
+			if (result.verify_crc && !result.crc_match())
+			{
+				err = string::tformat("bad crc %f (should be %f)",
+					result.crc_calculated, result.crc_reported);
+			}
 		}
 
 		io::eprintfn("%11s:  %s %s", verb, filename, err);

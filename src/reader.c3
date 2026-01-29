@@ -429,8 +429,12 @@ fn LimitReader? ZipEntry.open_compressed(&self, InStream file)
 struct ExtractResult
 {
 	usz bytes;
-	bool checksum_ok;
+	bool verify_crc;
+	uint crc_reported;
+	uint crc_calculated;
 }
+
+fn bool ExtractResult.crc_match(&self) => self.crc_reported == self.crc_calculated;
 
 <*
  Extract, decompress and write the file content to an output stream.
@@ -463,10 +467,15 @@ fn ExtractResult? ZipEntry.extract_to(&self, OutStream output, InStream file, bo
 		return UNSUPPORTED_COMPRESSION~;
 	}
 
-	return {
-		.bytes = io::write_all(output, dst)!,
-		.checksum_ok = verify_checksum ? crc32::hash(dst) == self.crc32 : true,
-	};
+	ExtractResult result;
+	result.bytes = io::write_all(output, dst)!;
+	if (verify_checksum)
+	{
+		result.verify_crc = true;
+		result.crc_reported = self.crc32;
+		result.crc_calculated = crc32::hash(dst);
+	}
+	return result;
 }
 
 <*
