@@ -284,6 +284,8 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	// Obtain filename
 	if (self.flag.language)
 	{
+		// Language encoding flag is set. Filename and comment fields
+		// must be encoded in UTF-8.
 		self.filename = local_header.filename.copy(allocator);;
 	}
 	else if (try chunk = find_extra_header(self.extra, UNICODE_PATH_HEADER))

@@ -52,6 +52,6 @@ echo "************************************"
 echo "*** (3) zipar / unzip round-trip ***"
 echo "************************************"
 $zipar $zipfile ./resources/test_zip
-unzip $zipfile -d /tmp
+(cd /tmp && 7z x $zipfile)
 diff -sr resources/test_zip /tmp/resources/test_zip
 cleanup
