@@ -25,8 +25,8 @@ jobs:
           submodules: 'true'
       - uses: radekm/setup-c3@v2
         with:
-          # version: v0.7.0
-          version: latest-prerelease-tag
+          version: v0.7.9
+          # version: latest-prerelease-tag
       - shell: bash
         run: c3c test
 
