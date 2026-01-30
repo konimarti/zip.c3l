@@ -43,8 +43,8 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 	}
 	else
 	{
-		// Fallback: End Record not found, scan for Local File Header.
-		// TODO: Check for Central Directory header as another fallback option?
+		// Fallback for corrupted zip file when the End Record is not
+		// found: Scan for Local File Headers and collect them.
 		List {ZipEntry} entries;
 		entries.tinit();
 
@@ -56,13 +56,9 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 			local_header.unpack(tmem, file)!;
 
 			// Hack together an (incomplete) Central Directory File header
-			central_header.filename        = local_header.filename.copy(self.allocator);
-			central_header.filename_len    = local_header.filename_len;
-			central_header.extra           = local_header.extra.copy(self.allocator);
-			central_header.extra_len       = local_header.extra_len;
+			central_header = {};
 			central_header.compress_size   = local_header.compress_size;
 			central_header.uncompress_size = local_header.uncompress_size;
-			central_header.compress_method = local_header.compress_method;
 			central_header.crc32           = local_header.crc32;
 			central_header.rel_offset      = (uint)loc;
 
