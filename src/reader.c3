@@ -82,6 +82,11 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 
 	self.is_zip64 = offset >= 0xFF_FF_FF_FF || nrecords >= 0xFF_FF;
 
+	$if $feature(DEBUG):
+	io::printfn("END RECORD");
+	io::printfn("%s", end_record);
+	$endif
+
 	if (self.is_zip64)
 	{
 		Zip64EndLocator locator;

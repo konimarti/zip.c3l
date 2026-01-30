@@ -184,7 +184,7 @@ fn bool? add_to_zip(Path current_path, bool is_dir, void* arg) @private => @pool
 	filename = format_filename(tmem, filename, is_dir);
 
 	// Append file to zip archive
-	ZipCompressMethod method = content.len < 32 ? COMPRESS_STORE : COMPRESS_DEFLATE;
+	ZipCompressMethod method = content.len < 32  || content.len > 1e9 ? COMPRESS_STORE : COMPRESS_DEFLATE;
 	ZipEntry entry = walker.writer.write_buffer(filename, content, method)!;
 
 	double ratio = entry.uncompress_size > 0 ?

@@ -99,6 +99,12 @@ fn ZipEntry? ZipWriter.write_buffer(&self, String filename, char[] content,
 	return entry;
 }
 
+macro clamp(value, $Type)
+{
+	if (value > $Type.max) return $Type.max;
+	return ($Type)value;
+}
+
 fn void? ZipWriter.write_local_file_header(&self, ZipEntry *entry)
 {
 	 write_le_32(&self.writer, read_le_32(SIGNATURE_LOCAL[:4]))!;
@@ -108,8 +114,8 @@ fn void? ZipWriter.write_local_file_header(&self, ZipEntry *entry)
 	 write_le_16(&self.writer, (ushort)entry.time.last_mod_time)!;
 	 write_le_16(&self.writer, (ushort)entry.date.last_mod_date)!;
 	 write_le_32(&self.writer, (uint)entry.crc32)!;
-	 write_le_32(&self.writer, (uint)entry.compress_size)!;
-	 write_le_32(&self.writer, (uint)entry.uncompress_size)!;
+	 write_le_32(&self.writer, clamp(entry.compress_size, uint))!;
+	 write_le_32(&self.writer, clamp(entry.uncompress_size, uint))!;
 	 write_le_16(&self.writer, (ushort)entry.filename.len)!;
 	 write_le_16(&self.writer, (ushort)entry.extra.len)!;
 
@@ -127,15 +133,15 @@ fn void? ZipWriter.write_central_directory_header(&self, ZipEntry *entry)
 	 write_le_16(&self.writer, (ushort)entry.time.last_mod_time)!;
 	 write_le_16(&self.writer, (ushort)entry.date.last_mod_date)!;
 	 write_le_32(&self.writer, (uint)entry.crc32)!;
-	 write_le_32(&self.writer, (uint)entry.compress_size)!;
-	 write_le_32(&self.writer, (uint)entry.uncompress_size)!;
+	 write_le_32(&self.writer, clamp(entry.compress_size, uint))!;
+	 write_le_32(&self.writer, clamp(entry.uncompress_size, uint))!;
 	 write_le_16(&self.writer, (ushort)entry.filename.len)!;
 	 write_le_16(&self.writer, (ushort)entry.extra.len)!;
 	 write_le_16(&self.writer, 0)!;
 	 write_le_16(&self.writer, 0)!;
 	 write_le_16(&self.writer, 0)!;
 	 write_le_32(&self.writer, 0)!;
-	 write_le_32(&self.writer, (uint)entry.rel_offset)!;
+	 write_le_32(&self.writer, clamp(entry.rel_offset, uint))!;
 
 	 if (entry.filename.len) self.writer.write(entry.filename)!;
 	 if (entry.extra.len) self.writer.write(entry.extra)!;
@@ -148,8 +154,8 @@ fn void? ZipWriter.write_end_record(&self, usz offset, usz size_directory)
 	 write_le_16(&self.writer, 0)!;
 	 write_le_16(&self.writer, (ushort)self.entries.len())!;
 	 write_le_16(&self.writer, (ushort)self.entries.len())!;
-	 write_le_32(&self.writer, (uint)size_directory)!;
-	 write_le_32(&self.writer, (uint)offset)!;
+	 write_le_32(&self.writer, clamp(size_directory, uint))!;
+	 write_le_32(&self.writer, clamp(offset, uint))!;
 	 write_le_16(&self.writer, 0)!;
 }
 
@@ -163,8 +169,8 @@ fn void? ZipWriter.write_zip64_end_record(&self, usz offset, usz size_directory)
 	 write_le_32(&self.writer, 0)!; // Disk start
 	 write_le_64(&self.writer, (ulong)self.entries.len())!;
 	 write_le_64(&self.writer, (ulong)self.entries.len())!;
-	 write_le_64(&self.writer, (uint)size_directory)!;
-	 write_le_64(&self.writer, (uint)offset)!;
+	 write_le_64(&self.writer, (ulong)size_directory)!;
+	 write_le_64(&self.writer, (ulong)offset)!;
 }
 
 fn void? ZipWriter.write_zip64_end_locator(&self, usz offset_eocd64)
