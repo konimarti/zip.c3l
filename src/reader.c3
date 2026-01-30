@@ -376,8 +376,6 @@ fn void ZipEntry.free(&self)
 
 fn void? ZipEntry.add_zip64_extra_field(&self)
 {
-	// TODO: Is this the correct place? When not when we "pack" the local
-	// and central headers?
 	if (self.uncompress_size < uint.max &&
 		self.compress_size < uint.max &&
 		self.rel_offset < uint.max) return;

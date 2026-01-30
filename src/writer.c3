@@ -28,9 +28,19 @@ fn void? ZipWriter.close(&self)
 	{
 		self.write_central_directory_header(entry)!;
 	}
+	usz size_directory = self.writer.tell() - offset_directory;
 
-	// And finally the End of Directory Record.
-	self.write_end_record(offset_directory)!;
+	if (self.entries.len() > ushort.max ||
+		offset_directory > uint.max ||
+		size_directory > uint.max)
+	{
+		usz offset_eoc64 = self.writer.tell();
+		self.write_zip64_end_record(offset_directory, size_directory)!;
+		self.write_zip64_end_locator(offset_eoc64)!;
+	}
+
+	// And finally, the End of Directory Record.
+	self.write_end_record(offset_directory, size_directory)!;
 }
 
 fn void ZipWriter.free(&self)
@@ -131,9 +141,8 @@ fn void? ZipWriter.write_central_directory_header(&self, ZipEntry *entry)
 	 if (entry.extra.len) self.writer.write(entry.extra)!;
 }
 
-fn void? ZipWriter.write_end_record(&self, usz offset)
+fn void? ZipWriter.write_end_record(&self, usz offset, usz size_directory)
 {
-	 usz size_directory = self.writer.tell() - offset;
 	 write_le_32(&self.writer, read_le_32(SIGNATURE_END[:4]))!;
 	 write_le_16(&self.writer, 0)!;
 	 write_le_16(&self.writer, 0)!;
@@ -142,6 +151,28 @@ fn void? ZipWriter.write_end_record(&self, usz offset)
 	 write_le_32(&self.writer, (uint)size_directory)!;
 	 write_le_32(&self.writer, (uint)offset)!;
 	 write_le_16(&self.writer, 0)!;
+}
+
+fn void? ZipWriter.write_zip64_end_record(&self, usz offset, usz size_directory)
+{
+	 write_le_32(&self.writer, read_le_32(SIGNATURE_END_ZIP64[:4]))!;
+	 write_le_64(&self.writer, 56-12)!; // Size of this record (EOCD64) - 12
+	 write_le_16(&self.writer, 0)!; // Version made
+	 write_le_16(&self.writer, 0)!; // Version min
+	 write_le_32(&self.writer, 0)!; // Number of disk
+	 write_le_32(&self.writer, 0)!; // Disk start
+	 write_le_64(&self.writer, (ulong)self.entries.len())!;
+	 write_le_64(&self.writer, (ulong)self.entries.len())!;
+	 write_le_64(&self.writer, (uint)size_directory)!;
+	 write_le_64(&self.writer, (uint)offset)!;
+}
+
+fn void? ZipWriter.write_zip64_end_locator(&self, usz offset_eocd64)
+{
+	 write_le_32(&self.writer, read_le_32(SIGNATURE_LOCATOR_ZIP64[:4]))!;
+	 write_le_32(&self.writer, 0)!; // Disk start of EOCD64.
+	 write_le_64(&self.writer, (ulong)offset_eocd64)!;
+	 write_le_32(&self.writer, 0)!;
 }
 
 fn void? write_le_16(OutStream w, ushort s) @inline => io::write_le_short(w, s);
