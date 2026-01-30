@@ -244,6 +244,56 @@ fn usz? ZipDate.to_format(&self, Formatter *f) @dynamic
 }
 
 <*
+ Upper byte of version mapping (4.4.2.2)
+*>
+enum Compat : const inline char
+{
+	MSDOS      = 0,
+	AMIGA      = 1,
+	OPENVS     = 2,
+	UNIX       = 3,
+	ATARI      = 5,
+	OS2        = 6,
+	MACINTOSH  = 7,
+	ZSYSTEM    = 8,
+	CPM        = 9,
+	NTFS       = 10,
+	MVS        = 11,
+	VSE        = 12,
+	ACORN_RISC = 13,
+	VFAT       = 14,
+	MVW        = 15,
+	BEOS       = 16,
+	TANDEM     = 17,
+	OS400      = 18,
+	DARWIN     = 19,
+}
+
+<*
+*>
+bitstruct ZipVersion (Printable) : ushort
+{
+	// Spec/10 => Major Version
+	// Spec%10 => Minor Version
+	char spec   : 0 .. 7;
+	char compat : 8 .. 15;
+}
+
+fn ZipVersion* ZipVersion.init(&self, char major, char minor, char compat)
+{
+	self.spec = major/10 + major%10;
+	self.compat = compat;
+	return self;
+}
+
+fn usz? ZipVersion.to_format(&self, Formatter *f) @dynamic
+{
+	usz? n;
+	n += f.printf("%d.%d (Compatibility %d)", self.spec/10, self.spec%2, self.compat);
+	return n;
+}
+
+<*
  ZipEntry contains the metadata for a file entry in the zip archive.
 *>
 struct ZipEntry
@@ -348,7 +398,7 @@ fn ZipEntry*? ZipEntry.init_with_buffer(&self, Allocator allocator, String filen
 {
 	// TODO: Make it zip64 compatible.
 	self.allocator       = allocator;
-	self.version_min     = 0; 			// TODO: What's the minimum version? If we use zip64, min. version is >4.5.
+	self.version_min     = (ushort)MIN_VERSION;
 	self.flag.language   = true; 			// We are only using utf-8 strings
 	self.compress_method = compress_method;
 	self.crc32 	     = crc32::hash(content);
@@ -356,7 +406,7 @@ fn ZipEntry*? ZipEntry.init_with_buffer(&self, Allocator allocator, String filen
 	self.uncompress_size = content.len;
 	self.filename        = filename.copy(allocator);
 
-	self.version_used    = 0; // TODO: What's the version used?
+	self.version_used    = (ushort)VERSION_USED;
 	self.internal_attr   = 0;
 	self.external_attr   = 0;
 
@@ -674,27 +724,27 @@ fn usz? ZipFlag.to_format(&self, Formatter *f) @dynamic
 *>
 struct ZipCentralFileHeader (Printable)
 {
-	Allocator allocator;
-	uint      signature;
-	ushort    version_used;
-	ushort    version_min;
-	ZipFlag   flag;
-	ushort    compress_method;
-	ushort    last_mod_time;
-	ushort    last_mod_date;
-	uint      crc32;		// of uncompressed data
-	ulong     compress_size;
-	ulong     uncompress_size;
-	ushort    filename_len; 	// n
-	ushort    extra_len; 		// m
-	ushort    comment_len; 		// k
-	ushort    disk_nr; 		// disk on which file starts
-	ushort    internal_attr;
-	uint      external_attr;
-	ulong     rel_offset; 		// relative offset of local file header
-	String    filename; 		// filename.len == n
-	String    extra; 		// extra.len == m
-	String    comment; 		// comment.len == k
+	Allocator  allocator;
+	uint       signature;
+	ushort     version_used;
+	ushort     version_min;
+	ZipFlag    flag;
+	ushort     compress_method;
+	ushort     last_mod_time;
+	ushort     last_mod_date;
+	uint       crc32;		// of uncompressed data
+	ulong      compress_size;
+	ulong      uncompress_size;
+	ushort     filename_len; 	// n
+	ushort     extra_len; 		// m
+	ushort     comment_len; 		// k
+	ushort     disk_nr; 		// disk on which file starts
+	ushort     internal_attr;
+	uint       external_attr;
+	ulong      rel_offset; 		// relative offset of local file header
+	String     filename; 		// filename.len == n
+	String     extra; 		// extra.len == m
+	String     comment; 		// comment.len == k
 }
 
 fn void ZipCentralFileHeader.free(&self)
@@ -755,8 +805,8 @@ fn usz? ZipCentralFileHeader.to_format(&self, Formatter *f) @dynamic
 	n += f.printf("%s\n\n", self.filename);
 	n += f.printf("offset of local header from start of archive:   %d\n\n", self.rel_offset);
 
-	n += f.printf("version of encoding software:                   %s\n", self.version_used);
-	n += f.printf("minimum software version required to extract:   %s\n", self.version_min);
+	n += f.printf("version of encoding software:                   %s\n", (ZipVersion)self.version_used);
+	n += f.printf("minimum software version required to extract:   %s\n", (ZipVersion)self.version_min);
 	n += f.printf("flags:                                          %s\n", self.flag);
 	n += f.printf("compression method:                             %s\n", self.compress_method);
 	n += f.printf("32-bit CRC value (hex):                         %x\n", self.crc32);
@@ -874,8 +924,7 @@ fn usz? ZipLocalFileHeader.to_format(&self, Formatter *f) @dynamic
 {
 	usz? n;
 	n += f.printf("%s\n\n", self.filename);
-
-	n += f.printf("minimum software version required to extract:   %s\n", self.version_min);
+	n += f.printf("minimum software version required to extract:   %s\n", (ZipVersion)self.version_min);
 	n += f.printf("flags:                                          %s\n", self.flag);
 	n += f.printf("compression method:                             %s\n", self.compress_method);
 	n += f.printf("32-bit CRC value (hex):                         %x\n", self.crc32);

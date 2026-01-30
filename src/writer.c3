@@ -157,8 +157,8 @@ fn void? ZipWriter.write_zip64_end_record(&self, usz offset, usz size_directory)
 {
 	 write_le_32(&self.writer, read_le_32(SIGNATURE_END_ZIP64[:4]))!;
 	 write_le_64(&self.writer, 56-12)!; // Size of this record (EOCD64) - 12
-	 write_le_16(&self.writer, 0)!; // Version made
-	 write_le_16(&self.writer, 0)!; // Version min
+	 write_le_16(&self.writer, (ushort)VERSION_USED)!;
+	 write_le_16(&self.writer, (ushort)MIN_VERSION)!;
 	 write_le_32(&self.writer, 0)!; // Number of disk
 	 write_le_32(&self.writer, 0)!; // Disk start
 	 write_le_64(&self.writer, (ulong)self.entries.len())!;

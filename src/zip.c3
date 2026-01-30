@@ -41,6 +41,9 @@ faultdef NOT_FOUND,
 	UNSUPPORTED_COMPRESSION,
 	UNSUPPORTED_ZIP64;
 
+const ZipVersion VERSION_USED = { .spec = 20, .compat = Compat.UNIX };
+const ZipVersion MIN_VERSION  = { .spec = 20, .compat = 0 };
+
 <*
  Open a zip archive from a stream. The `archive` stream needs to be closed by
  the caller.
