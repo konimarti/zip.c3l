@@ -37,12 +37,9 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 
 	defer catch self.free();
 
-	Clock c = clock::now();
-
 	if (try loc = find_signature_r(file, SIGNATURE_END))
 	{
 		self.end_record_offset = loc;
-		io::printfn("find signature reverse: %s", c.mark());
 	}
 	else
 	{
@@ -76,7 +73,6 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 
 		self.entries = entries.to_array(self.allocator);
 
-		io::printfn("find fallback: %s", c.mark());
 		return self;
 	}
 
@@ -107,8 +103,6 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		self.central_directory_offset = record_z64.rel_offset;
 		offset   = record_z64.rel_offset;
 		nrecords = record_z64.tot_nr_records;
-
-		io::printfn("is_zip64: %s", c.mark());
 	}
 
 	self.entries = allocator::new_array(self.allocator, ZipEntry, nrecords);
@@ -118,8 +112,8 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 	{
 		file.seek(offset, Seek.SET)!;
 		central_header.unpack(tmem, file)!;
-
 		offset = file.seek(0, Seek.CURSOR)!;
+
 		file.seek(central_header.rel_offset, Seek.SET)!;
 		local_header.unpack(tmem, file)!;
 
@@ -133,11 +127,29 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		io::printfn("%s", local_header);
 		$endif
 
-		zip_file.init_with_headers(
-			self.allocator, central_header, local_header)!;
+		ZipEntry *entry = zip_file.init_with_headers(self.allocator,
+			central_header, local_header)!;
+
+		if (entry.is_streaming())
+		{
+			// Verify data against Data Descriptor.
+			file.seek(entry.compress_size, Seek.CURSOR)!;
+			ZipDataDescriptor dd;
+			bool entry_is_zip64 = entry.uncompress_size > uint.max ||
+				entry.compress_size > uint.max;
+			dd.unpack(file, entry_is_zip64)!;
+
+			$if $feature(DEBUG):
+			io::printfn("DATA DESCRIPTOR #%2d", nr+1);
+			io::printfn("-------------------");
+			io::printfn("%s", dd);
+			$endif
+			assert(dd.crc32 == entry.crc32);
+			assert(dd.compress_size == entry.compress_size);
+			assert(dd.uncompress_size == entry.uncompress_size);
+		}
 	}
 
-	io::printfn("parsed: %s", c.mark());
 	return self;
 }
 
@@ -155,8 +167,6 @@ fn usz? ZipReader.to_format(&self, Formatter *f) @dynamic
 	double tot_comp, tot_uncomp;
 	foreach (i, entry : self)
 	{
-		io::printfn("  compressed size: %d", entry.compress_size);
-		io::printfn("uncompressed size: %d", entry.uncompress_size);
 		tot_comp += entry.compress_size;
 		tot_uncomp += entry.uncompress_size;
 		n += f.printf("%08x %d %8d %s %s %s\n",
@@ -261,7 +271,7 @@ struct ZipEntry
 	ushort    internal_attr;
 	uint      external_attr;
 	ulong     rel_offset; 		// offset to begin of Local File Header
-	ulong     file_offset; 		// offset to beginn of compressed file data
+	ulong     file_offset; 		// offset to begin of compressed file data
 }
 
 // Code Page 437 (OEM-US, MS-DOS Latin US) as a Char32[] slice.
@@ -323,23 +333,10 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	self.file_offset   = (ulong)central_header.rel_offset + 30
 		+ local_header.filename_len + local_header.extra_len;
 
-	// If in ZIP64 format, replace the corresponding field.
-	if (self.is_zip64())
-	{
-		if (try chunk = find_extra_field(self.extra, ZIP64_EXTRA_HEADER))
-		{
-			Zip64ExtraField zip64_extra;
-			zip64_extra.unpack(chunk)!;
-			if (self.compress_size   == 0xFF_FF_FF_FF) self.compress_size   = zip64_extra.compress_size;
-			if (self.uncompress_size == 0xFF_FF_FF_FF) self.uncompress_size = zip64_extra.uncompress_size;
-			if (self.rel_offset      == 0xFF_FF_FF_FF) self.rel_offset      = zip64_extra.rel_offset;
-		}
-	}
-
 	// If Zip file was created "streaming", then the local file header will
 	// have the crc and size values as 0. Get the correct values from the
 	// central header. The data can be verify by reading the Data
-	// Descritpor that appears after the last byte of the compressed data.
+	// Descriptor that appears after the last byte of the compressed data.
 	if (self.flag.streaming)
 	{
 		self.crc32           = central_header.crc32;
@@ -353,9 +350,9 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 fn ZipEntry*? ZipEntry.init_with_buffer(&self, Allocator allocator, String filename,
 	char[] content, char[] compressed, ZipCompressMethod compress_method = COMPRESS_STORE)
 {
-	// TODO: Is this zip64 compatible?
+	// TODO: Make it zip64 compatible.
 	self.allocator       = allocator;
-	self.version_min     = 0; 			// TODO: What's the minimum version?
+	self.version_min     = 0; 			// TODO: What's the minimum version? If we use zip64, min. version is >4.5.
 	self.flag.language   = true; 			// We are only using utf-8 strings
 	self.compress_method = compress_method;
 	self.crc32 	     = crc32::hash(content);
@@ -377,14 +374,13 @@ fn void ZipEntry.free(&self)
 	self.extra.free(self.allocator);
 }
 
-fn bool ZipEntry.is_zip64(&self) =>
-	self.uncompress_size >= 0xFF_FF_FF_FF ||
-	self.compress_size >= 0xFF_FF_FF_FF ||
-	self.rel_offset >= 0xFF_FF_FF_FF;
-
 fn void? ZipEntry.add_zip64_extra_field(&self)
 {
-	if (!self.is_zip64()) return; // Nothing to do here.
+	// TODO: Is this the correct place? When not when we "pack" the local
+	// and central headers?
+	if (self.uncompress_size < uint.max &&
+		self.compress_size < uint.max &&
+		self.rel_offset < uint.max) return;
 
 	Zip64ExtraField zip64_extra = {
 		.header_id       = ZIP64_EXTRA_HEADER,
@@ -693,15 +689,15 @@ struct ZipCentralFileHeader (Printable)
 	ushort    last_mod_time;
 	ushort    last_mod_date;
 	uint      crc32;		// of uncompressed data
-	uint      compress_size;
-	uint      uncompress_size;
+	ulong     compress_size;
+	ulong     uncompress_size;
 	ushort    filename_len; 	// n
 	ushort    extra_len; 		// m
 	ushort    comment_len; 		// k
 	ushort    disk_nr; 		// disk on which file starts
 	ushort    internal_attr;
 	uint      external_attr;
-	uint      rel_offset; 		// relative offset of local file header
+	ulong     rel_offset; 		// relative offset of local file header
 	String    filename; 		// filename.len == n
 	String    extra; 		// extra.len == m
 	String    comment; 		// comment.len == k
@@ -743,6 +739,20 @@ fn void? ZipCentralFileHeader.unpack(&self, Allocator allocator, InStream file)
 	self.filename        = read_string(allocator, file, self.filename_len)!;
 	self.extra           = read_string(allocator, file, self.extra_len)!;
 	self.comment         = read_string(allocator, file, self.comment_len)!;
+
+	// Use Zip64 extra field when available.
+	if (self.extra.len)
+	{
+		if (try field = find_extra_field(self.extra, ZIP64_EXTRA_HEADER))
+		{
+			Zip64ExtraField zip64_extra;
+			zip64_extra.unpack(field)!;
+			usz len = zip64_extra.data_size;
+			self.uncompress_size = zip64_extra.uncompress_size;
+			if (len >= 16) self.compress_size = zip64_extra.compress_size;
+			if (len >= 24) self.rel_offset = zip64_extra.rel_offset;
+		}
+	}
 }
 
 fn usz? ZipCentralFileHeader.to_format(&self, Formatter *f) @dynamic
@@ -815,8 +825,8 @@ struct ZipLocalFileHeader (Printable)
 	ushort    last_mod_time;
 	ushort    last_mod_date;
 	uint      crc32; 		// of uncompressed data
-	uint      compress_size;
-	uint      uncompress_size;
+	ulong     compress_size;
+	ulong     uncompress_size;
 	ushort    filename_len; 	// n
 	ushort    extra_len; 		// m
 	String    filename; 		// filename.len == n
@@ -851,6 +861,19 @@ fn void? ZipLocalFileHeader.unpack(&self, Allocator allocator, InStream file)
 	self.extra_len       = read_le_16(buf[28:2]);
 	self.filename        = read_string(allocator, file, self.filename_len)!;
 	self.extra           = read_string(allocator, file, self.extra_len)!;
+
+	// Use Zip64 extra field when available.
+	if (self.extra.len)
+	{
+		if (try field = find_extra_field(self.extra, ZIP64_EXTRA_HEADER))
+		{
+			Zip64ExtraField zip64_extra;
+			zip64_extra.unpack(field)!;
+			usz len = zip64_extra.data_size;
+			self.uncompress_size = zip64_extra.uncompress_size;
+			if (len >= 16) self.compress_size = zip64_extra.compress_size;
+		}
+	}
 }
 
 fn usz? ZipLocalFileHeader.to_format(&self, Formatter *f) @dynamic
@@ -905,21 +928,31 @@ struct ZipDataDescriptor (Printable)
 
 fn void? ZipDataDescriptor.unpack(&self, InStream file, bool zip64 = false)
 {
-	char[20] buf;
+	char[20+4] buf; // Add 4 for the optional signature.
 	usz len = zip64 ? 20 : 12;
 	fill_buffer(buf[:len], file) ?? INVALID_DATA_DESCRIPTOR~!;
 
-	self.crc32 = read_le_32(buf[0:4]);
+	char [] sbuf = buf[..];
+	self.crc32 = read_le_32(sbuf[0:4]);
+
+	if (self.crc32 == 0x08074b50)
+	{
+		// We encountered the optional signature. Fill buffer by 4 more
+		// bytes and reparse crc2.
+		fill_buffer(sbuf[len:4], file) ?? INVALID_DATA_DESCRIPTOR~!;
+		sbuf = sbuf[4..];
+		self.crc32 = read_le_32(sbuf[0:4]);
+	}
 
 	if (zip64)
 	{
-		self.compress_size   = read_le_64(buf[ 4:8]);
-		self.uncompress_size = read_le_64(buf[12:8]);
+		self.compress_size   = read_le_64(sbuf[ 4:8]);
+		self.uncompress_size = read_le_64(sbuf[12:8]);
 	}
 	else
 	{
-		self.compress_size   = read_le_32(buf[4:4]);
-		self.uncompress_size = read_le_32(buf[8:4]);
+		self.compress_size   = read_le_32(sbuf[4:4]);
+		self.uncompress_size = read_le_32(sbuf[8:4]);
 	}
 }
 
