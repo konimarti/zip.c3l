@@ -80,7 +80,7 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 	usz offset   = end_record.rel_offset;
 	usz nrecords = end_record.tot_nr_records;
 
-	self.is_zip64 = offset >= 0xFF_FF_FF_FF || nrecords >= 0xFF_FF;
+	self.is_zip64 = offset >= uint.max || nrecords >= ushort.max;
 
 	$if $feature(DEBUG):
 	io::printfn("END RECORD");
