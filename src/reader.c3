@@ -11,21 +11,25 @@ import compress::flate;
 struct ZipReader (Printable)
 {
 	Allocator  allocator;
-	InStream   file;     // Wrapped Zip archive file.
-	ZipEntry[] entries;  // File information in Zip archive.
+	ZipEntry[] entries;            // File information in Zip archive.
 	ulong      end_record_offset;
 	ulong      central_directory_offset;
-	bool       is_zip64; // Indicate ZIP64 file format if true.
+	bool       is_zip64;           // Indicate ZIP64 file format if true.
 }
 
-fn ZipReader* ZipReader.tinit(&self, InStream r) @inline => self.init(tmem, r);
-fn ZipReader* ZipReader.init(&self, Allocator allocator, InStream r)
+fn ZipReader* ZipReader.tinit(&self) @inline => self.init(tmem);
+fn ZipReader* ZipReader.init(&self, Allocator allocator)
 {
-	*self = { .allocator = allocator, .file = r };
+	*self = { .allocator = allocator };
 	return self;
 }
 
-fn ZipReader*? ZipReader.parse(&self) => @pool()
+<*
+ @param [&inout] file : "Zip archive to read."
+ @require self.allocator != null : "ZipReader needs to be initialized."
+ @require $defined(file.seek) : "Parse() only works with a seekable InStream."
+*>
+fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 {
 	ZipLocalFileHeader   local_header;
 	ZipCentralFileHeader central_header;
@@ -34,7 +38,7 @@ fn ZipReader*? ZipReader.parse(&self) => @pool()
 
 	defer catch self.free();
 
-	if (try loc = find_signature_r(self.file, SIGNATURE_END))
+	if (try loc = find_signature_r(file, SIGNATURE_END))
 	{
 		self.end_record_offset = loc;
 	}
@@ -45,12 +49,12 @@ fn ZipReader*? ZipReader.parse(&self) => @pool()
 		List {ZipEntry} entries;
 		entries.tinit();
 
-		self.file.seek(0, Seek.SET)!;
-		while (try loc = find_next_signature(self.file, SIGNATURE_LOCAL))
+		file.seek(0, Seek.SET)!;
+		while (try loc = find_next_signature(file, SIGNATURE_LOCAL))
 		{
 
-			self.file.seek(loc, Seek.SET)!;
-			local_header.unpack(tmem, self.file)!;
+			file.seek(loc, Seek.SET)!;
+			local_header.unpack(tmem, file)!;
 
 			// Hack together an (incomplete) Central Directory File header
 			central_header.filename        = local_header.filename.copy(self.allocator);
@@ -73,8 +77,8 @@ fn ZipReader*? ZipReader.parse(&self) => @pool()
 		return self;
 	}
 
-	self.file.seek(self.end_record_offset, Seek.SET)!;
-	end_record.unpack(tmem, self.file)!;
+	file.seek(self.end_record_offset, Seek.SET)!;
+	end_record.unpack(tmem, file)!;
 
 	self.central_directory_offset = end_record.rel_offset;
 
@@ -89,13 +93,13 @@ fn ZipReader*? ZipReader.parse(&self) => @pool()
 		Zip64EndRecord  record_z64;
 
 		// Find the Zip64 Locator.
-		usz loc = find_signature_r(self.file, SIGNATURE_LOCATOR_ZIP64)!;
-		self.file.seek(loc, Seek.SET)!;
-		locator.unpack(self.file)!;
+		usz loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64)!;
+		file.seek(loc, Seek.SET)!;
+		locator.unpack(file)!;
 
 		// Parse Zip64 End Record.
-		self.file.seek(locator.rel_offset, Seek.SET)!;
-		record_z64.unpack(self.file)!;
+		file.seek(locator.rel_offset, Seek.SET)!;
+		record_z64.unpack(file)!;
 
 		self.central_directory_offset = record_z64.rel_offset;
 		offset   = record_z64.rel_offset;
@@ -107,13 +111,13 @@ fn ZipReader*? ZipReader.parse(&self) => @pool()
 	// Read file headers.
 	foreach (&zip_file : self.entries)
 	{
-		self.file.seek(offset, Seek.SET)!;
-		central_header.unpack(tmem, self.file)!;
-		offset = self.file.seek(0, Seek.CURSOR)!;
+		file.seek(offset, Seek.SET)!;
+		central_header.unpack(tmem, file)!;
+		offset = file.seek(0, Seek.CURSOR)!;
 
-		self.file.seek(central_header.rel_offset, Seek.SET)!;
+		file.seek(central_header.rel_offset, Seek.SET)!;
 
-		local_header.unpack(tmem, self.file)!;
+		local_header.unpack(tmem, file)!;
 		if (central_header.flag.streaming)
 		{
 			// TODO: Write a unit test for a streamed Zip archive.
@@ -124,18 +128,18 @@ fn ZipReader*? ZipReader.parse(&self) => @pool()
 			// directory offset as an indicator for EOF. The
 			// data descriptor is then "read" backwards from the
 			// next locator or the central directory offset.
-			if (try loc = find_next_signature(self.file, SIGNATURE_LOCAL))
+			if (try loc = find_next_signature(file, SIGNATURE_LOCAL))
 			{
-				self.file.seek(self.is_zip64 ? -20 : -12, Seek.CURSOR)!;
+				file.seek(self.is_zip64 ? -20 : -12, Seek.CURSOR)!;
 			}
 			else
 			{
 				// `find_next_signature` threw pobably an EOF
 				// error; so we assume we are looking at the
 				// last file that ends with central directory.
-				self.file.seek(self.central_directory_offset + (self.is_zip64 ? -20 : -12), Seek.SET)!;
+				file.seek(self.central_directory_offset + (self.is_zip64 ? -20 : -12), Seek.SET)!;
 			}
-			data_descriptor.unpack(self.file, self.is_zip64)!;
+			data_descriptor.unpack(file, self.is_zip64)!;
 		}
 
 		zip_file.init_with_headers(self.allocator, central_header, local_header, data_descriptor)!;

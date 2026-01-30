@@ -41,7 +41,8 @@ fn void ZipWriter.free(&self)
 }
 
 <*
- Write a file with content and filename to the zip file.
+ Write a file with filename and content to the zip file with the given
+ compression method.
 
  The caller of this function should ensure that the filename follows the zip
  specification (no leading slash and trailing slash for directories).
@@ -146,8 +147,9 @@ fn void? ZipWriter.write_end_record(&self, usz offset)
 fn void? write_le_16(OutStream w, ushort s) @inline => io::write_le_short(w, s);
 fn void? write_le_32(OutStream w, uint s)   @inline => io::write_le_int(w, s);
 fn void? write_le_64(OutStream w, ulong s)  @inline => io::write_le_long(w, s);
+
 <*
- Wrapped OutStream to provide number of written bytes.
+ ByteCounterStream wraps an OutStream and counts the number of written bytes.
 *>
 struct ByteCounterStream (OutStream)
 {

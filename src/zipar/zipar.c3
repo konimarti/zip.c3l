@@ -24,7 +24,7 @@ fn int main(String[] args) => @pool()
 	File output = file::open(args[1], "w")!!;
 	defer (void)output.close();
 
-	zip::archive(args[2], &output)!!;
+	zip::archive(path::temp(args[2])!!, path::tcwd()!!, &output)!!;
 
 	return 0;
 }

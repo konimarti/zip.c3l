@@ -48,7 +48,7 @@ faultdef NOT_FOUND,
 fn ZipReader? open(Allocator allocator, InStream archive)
 {
 	ZipReader reader;
-	reader.init(allocator, archive).parse()!;
+	reader.init(allocator).parse(archive)!;
 	return reader;
 }
 fn ZipReader? topen(InStream archive) @inline => open(tmem, archive);
@@ -62,7 +62,7 @@ fn void? extract(InStream archive, String folder) => @pool()
 	if (!path::is_dir(base_folder)) return EXPECT_FOLDER~;
 
 	ZipReader reader;
-	reader.tinit(archive).parse()!;
+	reader.tinit().parse(archive)!;
 
 	String filename, path_str;
 	Path   path;
@@ -116,26 +116,28 @@ fn ZipWriter? create(Allocator allocator, OutStream output) => @pool()
 fn ZipWriter? tcreate(OutStream output) @inline => create(tmem, output);
 
 <*
- Archive a file or folder into a zip archive and write it to output.
+ Create a new zip archive and write it to `output`. The zip archive contains the
+ file or folder in `path`. The filenames are stripped with the path prefix
+ defined in `ref_path`.
+ @param path            : "File or folder to archive into output."
+ @param ref_path        : "Defines a path prefix to be stripped from the filenames."
+ @param [&inout] output : "Destination output for newly created zip archive."
 *>
-fn void? archive(String base_dir, OutStream output) => @pool()
+fn void? archive(Path path, Path ref_path, OutStream output) => @pool()
 {
 	ZipWriter writer;
 	writer.init(tmem, output)!;
 
-	Path cwd = path::tcwd()!;
-	Path path = path::temp(base_dir)!;
-
 	// Add (empty) base directory
 	if (path::is_dir(path))
 	{
-		String name = strip_base(tmem, path, cwd);
+		String name = strip_base(tmem, path, ref_path);
 		name = format_filename(tmem, name, true);
 		writer.write_buffer(name, {})!;
 	}
 
 	ZipDirectoryWalker walker;
-	walker.init(&writer, cwd);
+	walker.init(&writer, ref_path);
 
 	// Walk will write the local file headers, the (compressed) data, and
 	// stores the corresponding ZipEntry record

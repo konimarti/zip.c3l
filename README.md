@@ -91,7 +91,7 @@ fn void main() => @pool()
 }
 ```
 
-### List all filenames
+### Iterate over all files in a ZIP archive
 
 ```cpp
 import archive::zip;
@@ -112,7 +112,7 @@ fn void main() => @pool()
 ## API Reference
 
 - `fn void? zip::extract(InStream archive, String folder)`: Extract all files in zip archive to a directory.
-- `fn void? zip::archive(String path, OutStream output)`: Archive a file or folder to an output stream.
+- `fn void? zip::archive(Path path, Path ref_path, OutStream output)`: Archive a file or folder to an output stream.
 
 *ZipReader*
 - `fn ZipReader? zip::open(Allocator allocator, InStream archive)`: Open an existing zip archive for reading.
@@ -123,7 +123,7 @@ fn void main() => @pool()
 *ZipWriter*
 - `fn ZipWriter? zip::create(Allocator allocator, OutStream output)`: Create a new zip archive for writing.
 - `fn ZipEntry? ZipWriter.write_buffer(String filename, char[] content, ZipCompressMethod method = COMPRESS_STORE)`: Add a file with the specified filename and content.
-- `fn void ZipWriter.close()`: Close the zip archive and finalize changes.
+- `fn void ZipWriter.close()`: Close the zip writer and finalize the zip archive.
 - `fn void ZipWriter.free()`: Free the resources.
 
 *ZipEntry*
