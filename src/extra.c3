@@ -34,52 +34,54 @@ struct ExtraFieldIterator
 	usz    index;
 }
 
+struct ExtraField
+{
+	ushort header_id;
+	ushort payload_len;
+	char[] payload;
+}
 
 <*
  Returns the next extra block.
 *>
-fn char[]? ExtraFieldIterator.next(&self)
+fn ExtraField? ExtraFieldIterator.next(&self)
 {
-	if (self.index + 4 >= self.extra.len || self.extra.len < 4)
+	const usz HEADER_SIZE = 4;
+	if (self.index + HEADER_SIZE >= self.extra.len || self.extra.len < HEADER_SIZE)
 	{
 		return io::EOF~;
 	}
+	ExtraField field = parse_extra_field(self.extra[self.index..])!;
+	self.index += HEADER_SIZE + field.payload_len;
+	return field;
+}
 
-	ushort len = read_le_16(self.extra[self.index+2:2]) + 4;
-	if (self.index + len > self.extra.len)
-	{
-		return INVALID_EXTRA_FIELD_LENGTH~;
-	}
-
-	char[] next = self.extra[self.index:len];
-	self.index += len;
-
-	return next;
+fn ExtraField? parse_extra_field(char[] extra)
+{
+	usz n = extra.len;
+	if (n < 4) return INVALID_EXTRA_FIELD_LENGTH~;
+	ushort id  = read_le_16(extra[0:2]);
+	ushort len = read_le_16(extra[2:2]);
+	if (n < 4 + len) return INVALID_EXTRA_FIELD_LENGTH~;
+	char[] chunk = extra[4:len];
+	return { .header_id = id, .payload_len = len, .payload = chunk };
 }
 
 <*
- Find header with header_id in extra array and return the entire data block (header
- and corresponding data block).
+ Find an extra field for the given header_id in the extra array. Return the
+ ExtraField.
 
+ @return "ExtraField struct containing parsed header and payload data."
  @return? NOT_FOUND
 *>
-fn char[]? find_extra_header(char[] extra, ushort header_id)
+fn ExtraField? find_extra_field(char[] extra, ushort header_id)
 {
 	ExtraFieldIterator it = { extra, 0 };
-	while (try data = it.next())
+	while (try field = it.next())
 	{
-		if (is_extra_header(data, header_id)) return data;
+		if (field.header_id == header_id) return field;
 	}
 	return NOT_FOUND~;
-}
-
-<*
- Return true if data block starts with header_id.
-*>
-fn bool is_extra_header(char[] data, ushort header_id) @inline
-{
-	if (data.len < 2) return false;
-	return read_le_16(data[:2]) == header_id;
 }
 
 <*
@@ -107,26 +109,26 @@ struct Zip64ExtraField
 	uint   number;
 }
 
-fn void? Zip64ExtraField.unpack(&self, char[] extra)
+fn void? Zip64ExtraField.unpack(&self, ExtraField extra)
 {
-	if (extra.len < 4 || !is_extra_header(extra, ZIP64_EXTRA_HEADER))
+	if (extra.header_id != ZIP64_EXTRA_HEADER)
 	{
 		return INVALID_ZIP64_EXTRA_FIELD~;
 	}
 
-	self.header_id       = read_le_16(extra[ 0:2]);
-	self.data_size       = read_le_16(extra[ 2:2]);
-	self.uncompress_size = read_le_64(extra[ 4:8]);
+	self.header_id       = extra.header_id;
+	self.data_size       = extra.payload_len;
+	self.uncompress_size = read_le_64(extra.payload[ 0:8]);
 
 	usz len = self.data_size;
 	if (len < 16) return;
-	self.compress_size   = read_le_64(extra[12:8]);
+	self.compress_size   = read_le_64(extra.payload[8:8]);
 
 	if (len < 24) return;
-	self.rel_offset      = read_le_64(extra[20:8]);
+	self.rel_offset      = read_le_64(extra.payload[16:8]);
 
-	if (len < 32) return;
-	self.number          = read_le_32(extra[28:4]);
+	if (len < 28) return;
+	self.number          = read_le_32(extra.payload[24:4]);
 }
 
 fn void? Zip64ExtraField.pack(&self, char[] extra)
@@ -167,18 +169,18 @@ struct UnicodePathExtraField
 	String filename; 	// UnicodeName
 }
 
-fn void? UnicodePathExtraField.unpack(&self, char[] extra)
+fn void? UnicodePathExtraField.unpack(&self, ExtraField extra)
 {
-	if (extra.len < 9 || !is_extra_header(extra, UNICODE_PATH_HEADER))
+	if (extra.header_id != UNICODE_PATH_HEADER)
 	{
 		return INVALID_UNICODE_PATH_EXTRA_FIELD~;
 	}
 
-	self.header_id = read_le_16(extra[0:2]);
-	self.data_size = read_le_16(extra[2:2]);
-	self.version   =            extra[4];
-	self.crc32     = read_le_32(extra[5:4]);
-	self.filename  =    (String)extra[9..];
+	self.header_id = extra.header_id;
+	self.data_size = extra.payload_len;
+	self.version   =            extra.payload[0];
+	self.crc32     = read_le_32(extra.payload[1:4]);
+	self.filename  =    (String)extra.payload[5..];
 
 	if (crc32::hash(self.filename) != self.crc32) return INVALID_CRC32_HASH~;
 }

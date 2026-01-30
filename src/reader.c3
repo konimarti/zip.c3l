@@ -292,7 +292,7 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 		// must be encoded in UTF-8.
 		self.filename = local_header.filename.copy(allocator);;
 	}
-	else if (try chunk = find_extra_header(self.extra, UNICODE_PATH_HEADER))
+	else if (try chunk = find_extra_field(self.extra, UNICODE_PATH_HEADER))
 	{
 		UnicodePathExtraField unicode_extra;
 		unicode_extra.unpack(chunk)!;
@@ -314,7 +314,7 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	// If in ZIP64 format, replace the corresponding field.
 	if (self.is_zip64())
 	{
-		if (try chunk = find_extra_header(self.extra, ZIP64_EXTRA_HEADER))
+		if (try chunk = find_extra_field(self.extra, ZIP64_EXTRA_HEADER))
 		{
 			Zip64ExtraField zip64_extra;
 			zip64_extra.unpack(chunk)!;
