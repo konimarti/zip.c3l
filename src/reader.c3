@@ -192,18 +192,11 @@ fn ZipEntry ZipReader.get(&self, usz index) @operator([]) => self.entries[index]
   	Bits  5-10: Minutes (0-59)
   	Bits 11-15: Hours (0-23)
 *>
-struct ZipTime (Printable)
+bitstruct ZipTime (Printable) : ushort @littleendian
 {
-	union
-	{
-		bitstruct : ushort
-		{
-			char halfsec : 0 .. 4;
-			char minutes : 5 .. 10;
-			char hours   : 11 .. 15;
-		}
-		ushort last_mod_time;
-	}
+	char halfsec : 0 .. 4;
+	char minutes : 5 .. 10;
+	char hours   : 11 .. 15;
 }
 
 fn void ZipTime.init(&self, DateTime t)
@@ -224,18 +217,11 @@ fn usz? ZipTime.to_format(&self, Formatter *f) @dynamic
   	Bits  5-8: Month (1=Jan, 2=Feb, and so on)
   	Bits 9-15: Year offset from 1980 (add 1980 to get actual year)
 *>
-struct ZipDate (Printable)
+bitstruct ZipDate (Printable) : ushort @littleendian
 {
-	union
-	{
-		bitstruct : ushort
-		{
-			char day   : 0 .. 4;
-			char month : 5 .. 8;
-			char year  : 9 .. 15;
-		}
-		ushort last_mod_date;
-	}
+	char day   : 0 .. 4;
+	char month : 5 .. 8;
+	char year  : 9 .. 15;
 }
 
 fn void ZipDate.init(&self, DateTime t)
@@ -276,7 +262,7 @@ enum Compat : const inline char
 
 <*
 *>
-bitstruct ZipVersion (Printable) : ushort
+bitstruct ZipVersion (Printable) : ushort @littleendian
 {
 	// Spec/10 => Major Version
 	// Spec%10 => Minor Version
@@ -338,15 +324,15 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	self.allocator = allocator;
 
 	// From Local File Header
-	self.version_min        = local_header.version_min;
-	self.flag               = local_header.flag;
-	self.compress_method    = local_header.compress_method;
-	self.time.last_mod_time = local_header.last_mod_time;
-	self.date.last_mod_date = local_header.last_mod_date;
-	self.crc32              = local_header.crc32;
-	self.compress_size      = local_header.compress_size;
-	self.uncompress_size    = local_header.uncompress_size;
-	self.extra              = local_header.extra.copy(allocator);
+	self.version_min     = local_header.version_min;
+	self.flag            = local_header.flag;
+	self.compress_method = local_header.compress_method;
+	self.time            = (ZipTime)local_header.last_mod_time;
+	self.date            = (ZipDate)local_header.last_mod_date;
+	self.crc32           = local_header.crc32;
+	self.compress_size   = local_header.compress_size;
+	self.uncompress_size = local_header.uncompress_size;
+	self.extra           = local_header.extra.copy(allocator);
 
 	// How to get the UTF-8 encoded filename:
 	// 1. If Language Encoding Flag is set, nothing to do.

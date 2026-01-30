@@ -111,8 +111,8 @@ fn void? ZipWriter.write_local_file_header(&self, ZipEntry *entry)
 	 write_le_16(&self.writer, (ushort)entry.version_min)!;
 	 write_le_16(&self.writer, (ushort)entry.flag)!;
 	 write_le_16(&self.writer, (ushort)entry.compress_method)!;
-	 write_le_16(&self.writer, (ushort)entry.time.last_mod_time)!;
-	 write_le_16(&self.writer, (ushort)entry.date.last_mod_date)!;
+	 write_le_16(&self.writer, (ushort)entry.time)!;
+	 write_le_16(&self.writer, (ushort)entry.date)!;
 	 write_le_32(&self.writer, (uint)entry.crc32)!;
 	 write_le_32(&self.writer, clamp(entry.compress_size, uint))!;
 	 write_le_32(&self.writer, clamp(entry.uncompress_size, uint))!;
@@ -130,8 +130,8 @@ fn void? ZipWriter.write_central_directory_header(&self, ZipEntry *entry)
 	 write_le_16(&self.writer, (ushort)entry.version_min)!;
 	 write_le_16(&self.writer, (ushort)entry.flag)!;
 	 write_le_16(&self.writer, (ushort)entry.compress_method)!;
-	 write_le_16(&self.writer, (ushort)entry.time.last_mod_time)!;
-	 write_le_16(&self.writer, (ushort)entry.date.last_mod_date)!;
+	 write_le_16(&self.writer, (ushort)entry.time)!;
+	 write_le_16(&self.writer, (ushort)entry.date)!;
 	 write_le_32(&self.writer, (uint)entry.crc32)!;
 	 write_le_32(&self.writer, clamp(entry.compress_size, uint))!;
 	 write_le_32(&self.writer, clamp(entry.uncompress_size, uint))!;
