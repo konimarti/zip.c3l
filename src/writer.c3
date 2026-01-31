@@ -137,10 +137,10 @@ fn void? ZipWriter.write_central_directory_header(&self, ZipEntry *entry)
 	 write_le_32(&self.writer, clamp(entry.uncompress_size, uint))!;
 	 write_le_16(&self.writer, (ushort)entry.filename.len)!;
 	 write_le_16(&self.writer, (ushort)entry.extra.len)!;
-	 write_le_16(&self.writer, 0)!;
-	 write_le_16(&self.writer, 0)!;
-	 write_le_16(&self.writer, 0)!;
-	 write_le_32(&self.writer, 0)!;
+	 write_le_16(&self.writer, 0)!; // No comment, so 0 length.
+	 write_le_16(&self.writer, 0)!; // Disk start
+	 write_le_16(&self.writer, 0)!; // TODO: Internal attributes.
+	 write_le_32(&self.writer, 0)!; // TODO: External attributes.
 	 write_le_32(&self.writer, clamp(entry.rel_offset, uint))!;
 
 	 if (entry.filename.len) self.writer.write(entry.filename)!;
@@ -150,13 +150,13 @@ fn void? ZipWriter.write_central_directory_header(&self, ZipEntry *entry)
 fn void? ZipWriter.write_end_record(&self, usz offset, usz size_directory)
 {
 	 write_le_32(&self.writer, read_le_32(SIGNATURE_END[:4]))!;
-	 write_le_16(&self.writer, 0)!;
-	 write_le_16(&self.writer, 0)!;
-	 write_le_16(&self.writer, (ushort)self.entries.len())!;
-	 write_le_16(&self.writer, (ushort)self.entries.len())!;
+	 write_le_16(&self.writer, 0)!; // Number of disk
+	 write_le_16(&self.writer, 0)!; // Dist start
+	 write_le_16(&self.writer, clamp(self.entries.len(), ushort))!;
+	 write_le_16(&self.writer, clamp(self.entries.len(), ushort))!;
 	 write_le_32(&self.writer, clamp(size_directory, uint))!;
 	 write_le_32(&self.writer, clamp(offset, uint))!;
-	 write_le_16(&self.writer, 0)!;
+	 write_le_16(&self.writer, 0)!; // No EOCD comment, so 0 length.
 }
 
 fn void? ZipWriter.write_zip64_end_record(&self, usz offset, usz size_directory)

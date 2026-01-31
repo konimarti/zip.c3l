@@ -14,7 +14,6 @@ struct ZipReader (Printable)
 	ZipEntry[] entries;            // File information in Zip archive.
 	ulong      end_record_offset;
 	ulong      central_directory_offset;
-	bool       is_zip64;           // Indicate ZIP64 file format if true.
 }
 
 fn ZipReader* ZipReader.tinit(&self) @inline => self.init(tmem);
@@ -31,12 +30,7 @@ fn ZipReader* ZipReader.init(&self, Allocator allocator)
 *>
 fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 {
-	ZipLocalFileHeader   local_header;
-	ZipCentralFileHeader central_header;
-	ZipEndRecord         end_record;
-
 	defer catch self.free();
-
 	if (try loc = find_signature_r(file, SIGNATURE_END))
 	{
 		self.end_record_offset = loc;
@@ -52,11 +46,13 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		while (try loc = find_next_signature(file, SIGNATURE_LOCAL))
 		{
 
+			ZipCentralFileHeader central_header;
+			ZipLocalFileHeader local_header;
+
 			file.seek(loc, Seek.SET)!;
 			local_header.unpack(tmem, file)!;
 
 			// Hack together an (incomplete) Central Directory File header
-			central_header = {};
 			central_header.compress_size   = local_header.compress_size;
 			central_header.uncompress_size = local_header.uncompress_size;
 			central_header.crc32           = local_header.crc32;
@@ -72,22 +68,19 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		return self;
 	}
 
+	ZipEndRecord end_record;
 	file.seek(self.end_record_offset, Seek.SET)!;
 	end_record.unpack(tmem, file)!;
 
-	self.central_directory_offset = end_record.rel_offset;
-
 	usz offset   = end_record.rel_offset;
 	usz nrecords = end_record.tot_nr_records;
-
-	self.is_zip64 = offset >= uint.max || nrecords >= ushort.max;
 
 	$if $feature(DEBUG):
 	io::printfn("END RECORD");
 	io::printfn("%s", end_record);
 	$endif
 
-	if (self.is_zip64)
+	if (end_record.is_zip64())
 	{
 		Zip64EndLocator locator;
 		Zip64EndRecord  record_z64;
@@ -101,18 +94,22 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		file.seek(locator.rel_offset, Seek.SET)!;
 		record_z64.unpack(file)!;
 
-		self.central_directory_offset = record_z64.rel_offset;
 		offset   = record_z64.rel_offset;
 		nrecords = record_z64.tot_nr_records;
 	}
 
+	self.central_directory_offset = offset;
 	self.entries = allocator::new_array(self.allocator, ZipEntry, nrecords);
 
 	// Read file headers.
 	foreach (nr, &zip_file : self.entries)
 	{
+		ZipCentralFileHeader central_header;
+		ZipLocalFileHeader local_header;
+
 		file.seek(offset, Seek.SET)!;
 		central_header.unpack(tmem, file)!;
+
 		offset = file.seek(0, Seek.CURSOR)!;
 
 		file.seek(central_header.rel_offset, Seek.SET)!;
@@ -639,6 +636,15 @@ fn usz? ZipEndRecord.to_format(&self, Formatter *f) @dynamic
 	n += f.printf("Comment  : %s\n", self.comment)!;
 	return n;
 }
+
+fn bool ZipEndRecord.is_zip64(&self)
+{
+	return self.nr_records >= ushort.max ||
+	       self.tot_nr_records >= ushort.max ||
+	       self.size_bytes >= uint.max ||
+	       self.rel_offset >= uint.max;
+}
+
 
 <*
 *>
