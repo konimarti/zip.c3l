@@ -12,8 +12,6 @@ struct ZipReader (Printable)
 {
 	Allocator  allocator;
 	ZipEntry[] entries;            // File information in Zip archive.
-	ulong      end_record_offset;
-	ulong      central_directory_offset;
 }
 
 fn ZipReader* ZipReader.tinit(&self) @inline => self.init(tmem);
@@ -31,9 +29,11 @@ fn ZipReader* ZipReader.init(&self, Allocator allocator)
 fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 {
 	defer catch self.free();
+
+	ulong end_record_offset;
 	if (try loc = find_signature_r(file, SIGNATURE_END))
 	{
-		self.end_record_offset = loc;
+		end_record_offset = loc;
 	}
 	else
 	{
@@ -69,7 +69,7 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 	}
 
 	ZipEndRecord end_record;
-	file.seek(self.end_record_offset, Seek.SET)!;
+	file.seek(end_record_offset, Seek.SET)!;
 	end_record.unpack(tmem, file)!;
 
 	usz offset   = end_record.rel_offset;
@@ -98,7 +98,6 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		nrecords = record_z64.tot_nr_records;
 	}
 
-	self.central_directory_offset = offset;
 	self.entries = allocator::new_array(self.allocator, ZipEntry, nrecords);
 
 	// Read file headers.
@@ -142,9 +141,9 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 			io::printfn("-------------------");
 			io::printfn("%s", dd);
 			$endif
-			assert(dd.crc32 == entry.crc32);
-			assert(dd.compress_size == entry.compress_size);
-			assert(dd.uncompress_size == entry.uncompress_size);
+			entry.crc32 = dd.crc32;
+			entry.compress_size = dd.compress_size;
+			entry.uncompress_size = dd.uncompress_size;
 		}
 	}
 
