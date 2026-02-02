@@ -1,6 +1,6 @@
 module archive::zip;
 
-import std::io, std::time, std::hash::crc32, std::collections::list;
+import std::io, std::time, std::hash::crc32, std::collections::list, std::collections::map;
 import compress::flate;
 
 <*
@@ -26,9 +26,22 @@ fn ZipReader* ZipReader.init(&self, Allocator allocator)
 <*
  @param [&inout] file : "Zip archive to read."
  @require self.allocator != null : "ZipReader needs to be initialized."
+*>
+fn ZipReader*? ZipReader.parse(&self, InStream file)
+{
+	// if (&file.seek)
+	// {
+	// 	return self.parse_seek(file)!;
+	// }
+	return self.parse_stream(file)!;
+}
+
+<*
+ @param [&inout] file : "Zip archive to read."
+ @require self.allocator != null : "ZipReader needs to be initialized."
  @require $defined(file.seek) : "Parse() only works with a seekable InStream."
 *>
-fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
+fn ZipReader*? ZipReader.parse_seek(&self, InStream file) => @pool()
 {
 	defer catch self.free();
 	if (try loc = find_signature_r(file, SIGNATURE_END))
@@ -148,6 +161,107 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		}
 	}
 
+	return self;
+}
+
+<*
+ @require buf.len == 4 && sig.len == 4
+*>
+fn bool signature_match(char[] buf, usz read, char[] sig) @inline @private
+{
+	ulong mask = (1 << 2) - 1;
+	for (usz i = 0; i < 4; i++)
+	{
+		if (buf[(read+i) & mask] != sig[i]) return false;
+	}
+	return true;
+}
+
+struct ZipWrapReader (InStream)
+{
+	InStream file;
+	char[] sig;
+	bool once;
+}
+
+fn char? ZipWrapReader.read_byte(&self) @dynamic
+{
+	unreachable("not implemented");
+}
+fn usz? ZipWrapReader.read(&self, char[] buf) @dynamic
+{
+	if (self.once) return self.file.read(buf);
+	buf[:4] = self.sig[:4];
+	self.once = true;
+	return 4 + self.file.read(buf[4..]);
+}
+
+fn ZipWrapReader zip_wrap_reader(InStream file, char[] sig)
+{
+	return (ZipWrapReader){file, sig, false};
+}
+
+<*
+ @param [&inout] file : "Zip archive to read."
+ @require self.allocator != null : "ZipReader needs to be initialized."
+*>
+fn ZipReader*? ZipReader.parse_stream(&self, InStream file) => @pool()
+{
+	List{ZipEntry} entries;
+	entries.tinit();
+
+	HashMap{usz, ZipLocalFileHeader} headers;
+	headers.tinit();
+
+	// TODO: Do we need those at all? If yes, then populate them below.
+	// usz central_directory_offset;
+	// usz end_of_central_directory_offset;
+
+	usz read;
+	char[4] sig_buf;
+	ulong mask = (1 << 2) - 1;
+	while INPUT_LOOP: (try c = file.read_byte())
+	{
+		sig_buf[read & mask] = c;
+		read++;
+		if (read < 4) continue;
+		switch
+		{
+			case signature_match(&sig_buf, read, &SIGNATURE_LOCAL):
+				// We found a local header signature.
+				ZipLocalFileHeader local_header;
+				ZipWrapReader zwr = zip_wrap_reader(file, &SIGNATURE_LOCAL);
+				local_header.unpack(tmem, &zwr)!;
+				headers[read-4] = local_header;
+				io::eprintfn("%d bytes: Adding local file header.", read);
+			case signature_match(&sig_buf, read, &SIGNATURE_CENTRAL):
+				// We found a central directory header signature.
+				ZipCentralFileHeader central_header;
+				ZipWrapReader zwr = zip_wrap_reader(file, &SIGNATURE_CENTRAL);
+				central_header.unpack(tmem, &zwr)!;
+				io::eprintfn("Central directory with offset: %d", central_header.rel_offset);
+				if (try local_header = headers[central_header.rel_offset])
+				{
+					ZipEntry entry;
+					entry.init_with_headers(self.allocator,
+						central_header, local_header)!;
+					// TODO: store compressed data (buf[offset:central_header.compress_size]) for later extraction.
+					entries.push(entry);
+				}
+				else
+				{
+					io::eprintf("No matching local file header for the given central directory header.");
+					unreachable(" -- BOOM --");
+				}
+		}
+	}
+	// Strategy:
+	// 1. Collect all Local File Headers in a map (key: offset, value: local file header)
+	// 2. When we arrive at the central directory header,
+	// 2a. store the offset to the central directory
+	// 2b. match the current central directory heades with the local file header and create the zip entry
+	// 3. when we arrive at the end of directory header, store the offset.
+	self.entries = entries.to_array(self.allocator);
 	return self;
 }
 
