@@ -87,7 +87,9 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		Zip64EndRecord  record_z64;
 
 		// Find the Zip64 Locator.
-		usz loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64)!;
+		usz? loc = find_signature_r(file, SIGNATURE_LOCATOR_ZIP64);
+		if (catch loc) return MISSING_ZIP64_LOCATOR~;
+
 		file.seek(loc, Seek.SET)!;
 		locator.unpack(file)!;
 
