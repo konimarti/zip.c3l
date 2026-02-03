@@ -4,9 +4,7 @@ import std::io, std::time, std::hash::crc32, std::collections::list;
 import compress::flate;
 
 <*
- ZipReader stores the metadata for a Zip archive. Metadata includes the
- relevant offset to seek the local file header (stored in the ZipEntries),
- central directory headers, and end of record.
+ ZipReader stores the parsed metadata for the files stored in the Zip archive.
 *>
 struct ZipReader (Printable)
 {
@@ -37,7 +35,7 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 	}
 	else
 	{
-		// Fallback for corrupted zip file when the End Record is not
+		// Fallback for corrupted zip files when the End Record is not
 		// found: Scan for Local File Headers and collect them.
 		List {ZipEntry} entries;
 		entries.tinit();
@@ -140,23 +138,26 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		ZipEntry *entry = zip_file.init_with_headers(self.allocator,
 			central_header, local_header)!;
 
-		if (entry.is_streaming())
-		{
-			// Verify data against Data Descriptor.
-			file.seek(entry.compress_size, Seek.CURSOR)!;
-			ZipDataDescriptor dd;
-			bool entry_is_zip64 = entry.uncompress_size > uint.max ||
-				entry.compress_size > uint.max;
-			dd.unpack(file, entry_is_zip64)!;
+		if (!entry.is_streaming()) continue;
 
-			$if $feature(DEBUG):
-			io::printfn("DATA DESCRIPTOR #%2d", nr+1);
-			io::printfn("-------------------");
-			io::printfn("%s", dd);
-			$endif
-			entry.crc32 = dd.crc32;
-			entry.compress_size = dd.compress_size;
-			entry.uncompress_size = dd.uncompress_size;
+		// Verify data against Data Descriptor.
+		file.seek(entry.compress_size, Seek.CURSOR)!;
+		ZipDataDescriptor dd;
+		bool entry_is_zip64 = entry.uncompress_size >= uint.max ||
+			entry.compress_size >= uint.max;
+		dd.unpack(file, entry_is_zip64)!;
+
+		$if $feature(DEBUG):
+		io::printfn("DATA DESCRIPTOR #%2d", nr+1);
+		io::printfn("-------------------");
+		io::printfn("%s", dd);
+		$endif
+
+		if (dd.crc32 != entry.crc32 ||
+			dd.compress_size != entry.compress_size ||
+			dd.uncompress_size != entry.uncompress_size)
+		{
+			return DATA_DESCRIPTOR_MISMATCH~;
 		}
 	}
 
