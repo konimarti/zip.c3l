@@ -77,6 +77,7 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 
 	$if $feature(DEBUG):
 	io::printfn("END RECORD");
+	io::printfn("----------");
 	io::printfn("%s", end_record);
 	$endif
 
@@ -93,6 +94,16 @@ fn ZipReader*? ZipReader.parse(&self, InStream file) => @pool()
 		// Parse Zip64 End Record.
 		file.seek(locator.rel_offset, Seek.SET)!;
 		record_z64.unpack(file)!;
+
+		$if $feature(DEBUG):
+		io::printfn("ZIP64 LOCATOR");
+		io::printfn("-------------");
+		io::printfn("%s", locator);
+
+		io::printfn("ZIP64 END RECORD");
+		io::printfn("----------------");
+		io::printfn("%s", record_z64);
+		$endif
 
 		offset   = record_z64.rel_offset;
 		nrecords = record_z64.tot_nr_records;
@@ -268,7 +279,7 @@ bitstruct ZipVersion (Printable) : ushort @littleendian
 
 fn ZipVersion* ZipVersion.init(&self, char major, char minor, char compat)
 {
-	self.spec = major/10 + major%10;
+	self.spec = major/10 + minor%10;
 	self.compat = compat;
 	return self;
 }
@@ -276,7 +287,7 @@ fn ZipVersion* ZipVersion.init(&self, char major, char minor, char compat)
 fn usz? ZipVersion.to_format(&self, Formatter *f) @dynamic
 {
 	usz? n;
-	n += f.printf("%d.%d (Compatibility %d)", self.spec/10, self.spec%2, self.compat);
+	n += f.printf("%d.%d (Compatibility %d)", self.spec/10, self.spec%10, self.compat);
 	return n;
 }
 
@@ -348,7 +359,7 @@ fn ZipEntry*? ZipEntry.init_with_headers(&self, Allocator allocator,
 	}
 	else
 	{
-		// At this points, we must assume we have a filename encoded in
+		// At this point, we must assume we have a filename encoded in
 		// CP437.
 		DString name = dstring::new(allocator);
 		foreach (c : local_header.filename)
@@ -545,7 +556,7 @@ struct ZipDigitalSignature
 	 Size = SizeOfFixedFields + SizeOfVariableFields - 12
 
 *>
-struct Zip64EndRecord
+struct Zip64EndRecord (Printable)
 {
 	uint   signature;
 	ulong  record_size;
@@ -577,10 +588,19 @@ fn void? Zip64EndRecord.unpack(&self, InStream file)
 	self.rel_offset     = read_le_64(buf[48:8]);
 }
 
+fn usz? Zip64EndRecord.to_format(&self, Formatter *f) @dynamic
+{
+	usz n;
+	n += f.printf("Signature: %x\n", self.signature)!;
+	n += f.printf("Offset   : %d (0x%x)\n", self.rel_offset, self.rel_offset)!;
+	return n;
+}
+
+
 <*
  ZIP64 End of Central Directory Locator
 *>
-struct Zip64EndLocator
+struct Zip64EndLocator (Printable)
 {
 	uint  signature;
 	uint  disk_start;
@@ -598,6 +618,14 @@ fn void? Zip64EndLocator.unpack(&self, InStream file)
 	self.disk_start = read_le_32(buf[ 4:4]);
 	self.rel_offset = read_le_64(buf[ 8:8]);
 	self.tot_disks  = read_le_32(buf[16:4]);
+}
+
+fn usz? Zip64EndLocator.to_format(&self, Formatter *f) @dynamic
+{
+	usz n;
+	n += f.printf("Signature: %x\n", self.signature)!;
+	n += f.printf("Offset   : %d (0x%x)\n", self.rel_offset, self.rel_offset)!;
+	return n;
 }
 
 <*
@@ -632,7 +660,11 @@ fn usz? ZipEndRecord.to_format(&self, Formatter *f) @dynamic
 	n += f.printf("Total    : %d\n", self.tot_nr_records)!;
 	n += f.printf("Size     : %d\n", self.size_bytes)!;
 	n += f.printf("Offset   : %d\n", self.rel_offset)!;
-	n += f.printf("Comment  : %s\n", self.comment)!;
+	if (self.comment_len)
+	{
+		n += f.printf("Comment  : %s\n", self.comment)!;
+	}
+	n += f.printf("ZIP64    : %s\n", self.is_zip64())!;
 	return n;
 }
 
@@ -792,6 +824,13 @@ fn void? ZipCentralFileHeader.unpack(&self, Allocator allocator, InStream file)
 			if (len >= 16) self.compress_size = zip64_extra.compress_size;
 			if (len >= 24) self.rel_offset = zip64_extra.rel_offset;
 		}
+	}
+
+	// Verify Zip64 header fields.
+	if (self.compress_size >= uint.max || self.uncompress_size >= uint.max ||
+		self.rel_offset >= uint.max)
+	{
+		return MISSING_ZIP64_EXTRA~;
 	}
 }
 

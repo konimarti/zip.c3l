@@ -105,6 +105,28 @@ fn void test_open_zip_archive() => @pool()
 	assert(z.len() == 6);
 }
 
+fn void test_zip_eocd_only() => @pool()
+{
+	// Consists of the End Record (22bytes) only.
+	char[22] eocd;
+	eocd[:4] = x`504b0506`[..];
+	ZipReader z = zip::topen((ByteReader){}.init(eocd[..]))!!;
+	assert(z.len() == 0);
+}
+
+fn void test_zip_empty() => @pool()
+{
+	// Consists of the Local File Header (30 bytes), Central Directory
+	// Header (46 bytes) and EOCD (22 bytes).
+	char[30+46+22] zip = x`504b03043700000000000000000000000000000000000000000000000000
+504b01020000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000504b050600000000010001000000
+00001e0000000000`;
+	ZipReader z = zip::topen((ByteReader){}.init(zip[..]))!!;
+	assert(z.len() == 1);
+	assert(z[0].version_min == 55);
+}
+
 char[*] zip_writer_data = x`504b0304000000080000d26e0c5b340146be07000000070000000e000000
 646f63756d656e74312e74657874666f6f20626172504b03040000000800
 00d26e0c5b65c970920c0000000c0000000d000000646f63756d656e7432
