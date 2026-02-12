@@ -144,9 +144,16 @@ fn void? archive(Path path, Path ref_path, OutStream output) => @pool()
 	ZipDirectoryWalker walker;
 	walker.init(&writer, ref_path);
 
-	// Walk will write the local file headers, the (compressed) data, and
-	// stores the corresponding ZipEntry record
-	path.walk(&add_to_zip, &walker)!;
+	if (path::is_dir(path))
+	{
+		// Walk will write the local file headers, the (compressed) data, and
+		// stores the corresponding ZipEntry record
+		path.walk(&add_to_zip, &walker)!;
+	}
+	else
+	{
+		add_to_zip(path, false, &walker)!;
+	}
 
 	// Close ZipWriter will write central directory and the end record.
 	writer.close()!;
