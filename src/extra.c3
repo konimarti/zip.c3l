@@ -7,6 +7,7 @@ faultdef INVALID_EXTRA_FIELD_LENGTH,
 
 const ushort ZIP64_EXTRA_HEADER  = 0x0001;
 const ushort UNICODE_PATH_HEADER = 0x7075;
+const ushort AEX_EXTRA_HEADER    = 0x9901;
 
 <*
  Iterator over the extra fields of a Local File Header.
@@ -162,8 +163,6 @@ fn void? Zip64ExtraField.pack(&self, char[] extra)
 *>
 struct UnicodePathExtraField
 {
-	ushort header_id; 	// should be 0x7075
-	ushort data_size; 	// size of "extra" block
         char   version;
 	uint   crc32;	        // file name checksum
 	String filename; 	// UnicodeName
@@ -176,11 +175,33 @@ fn void? UnicodePathExtraField.unpack(&self, ExtraField extra)
 		return INVALID_UNICODE_PATH_EXTRA_FIELD~;
 	}
 
-	self.header_id = extra.header_id;
-	self.data_size = extra.payload_len;
 	self.version   =            extra.payload[0];
 	self.crc32     = read_le_32(extra.payload[1:4]);
 	self.filename  =    (String)extra.payload[5..];
 
 	if (crc32::hash(self.filename) != self.crc32) return INVALID_CRC32_HASH~;
+}
+
+<*
+WinZip AE-2 extra field (header id 0x9901)
+ 2 bytes  vendor version  (0x0002 = AE-2)
+ 2 bytes  vendor id       ('A','E')
+ 1 byte   encryption strength (1=AES-128, 2=AES-192, 3=AES-256)
+ 2 bytes  actual compression method
+*>
+struct AeXExtraField
+{
+	ushort vendor_version;
+	ushort vendor_id;
+	char   strength;
+	ushort compress_method;
+}
+
+fn void? AeXExtraField.unpack(&self, ExtraField extra)
+{
+    if (extra.payload_len < 7) return CORRUPT_FILE~;
+    self.vendor_version  = read_le_16(extra.payload[0:2]);
+    self.vendor_id       = read_le_16(extra.payload[2:2]);
+    self.strength        = extra.payload[4];
+    self.compress_method = read_le_16(extra.payload[5:2]);
 }

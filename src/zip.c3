@@ -17,7 +17,7 @@ const ZipCompressMethod COMPRESS_ZSTD    = 93; // TODO: unsupported
 const ZipCompressMethod COMPRESS_MP3     = 94; // TODO: unsupported
 const ZipCompressMethod COMPRESS_XZ      = 95; // TODO: unsupported
 const ZipCompressMethod COMPRESS_JPEG    = 96; // TODO: unsupported
-const ZipCompressMethod COMPRESS_AEX     = 99; // TODO: unsupported
+const ZipCompressMethod COMPRESS_AEX     = 99;
 
 // Signatures
 alias ZipSignature = char[4];

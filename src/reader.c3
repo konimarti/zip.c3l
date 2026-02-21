@@ -1,6 +1,7 @@
 module archive::zip;
 
 import std::io, std::time, std::hash::crc32, std::collections::list;
+import std::hash::sha1, std::crypto::aes;
 import compress::flate;
 
 <*
@@ -247,7 +248,7 @@ fn usz? ZipDate.to_format(&self, Formatter *f) @dynamic
 <*
  Upper byte of version mapping (4.4.2.2)
 *>
-enum Compat : const inline char
+constdef Compat : inline char
 {
 	MSDOS      = 0,
 	AMIGA      = 1,
@@ -496,6 +497,8 @@ struct ExtractResult
 	uint crc_calculated;
 }
 
+faultdef WRONG_PASSWORD;
+
 fn bool ExtractResult.crc_match(&self) => self.crc_reported == self.crc_calculated;
 
 <*
@@ -508,9 +511,65 @@ fn bool ExtractResult.crc_match(&self) => self.crc_reported == self.crc_calculat
  @param output : "Destination for decompressed data."
  @return "An ExtractResult with the number of decompressed bytes and checksum check."
 *>
-fn ExtractResult? ZipEntry.extract_to(&self, OutStream output, InStream file, bool verify_checksum = true) => @pool()
+fn ExtractResult? ZipEntry.extract_to(&self, OutStream output, InStream file,
+	bool verify_checksum = true, String password = "") => @pool()
 {
 	char[] dst;
+
+	if (self.compress_method == COMPRESS_AEX)
+	{
+
+		AeXExtraField aex;
+		aex.unpack(find_extra_field(self.extra, AEX_EXTRA_HEADER)!)!;
+
+		usz key_len, salt_len;
+		switch (aex.strength)
+		{
+			case 1: key_len = 16;
+			case 2: key_len = 24;
+			case 3: key_len = 32;
+			default: return CORRUPT_FILE~;
+		}
+		salt_len = key_len / 2;
+
+		char[] enc_buf = mem::temp_array(char, self.compress_size);
+		io::read_all(&&self.open_compressed(file), enc_buf)!;
+
+		if (enc_buf.len < salt_len + 2 + 10) return CORRUPT_FILE~;
+
+		char[] salt        = enc_buf[0:salt_len];
+		char[] pv_stored   = enc_buf[salt_len:2];
+		char[] cipher      = enc_buf[salt_len+2 .. enc_buf.len-10-1];
+		char[] hmac_stored = enc_buf[enc_buf.len-10..];
+
+		usz dk_len = key_len * 2 + 2;
+		char[] dk = mem::temp_array(char, dk_len);
+		sha1::pbkdf2(password, salt, 1000, dk);
+
+		char[] aes_key = dk[0:key_len ];
+		char[] mac_key = dk[key_len:key_len];
+		char[] pv_derived = dk[key_len*2:2];
+
+		if (pv_stored != pv_derived) return WRONG_PASSWORD~;
+
+		char[*] hmac_calc = sha1::hmac(mac_key, cipher);
+		if (hmac_stored != hmac_calc[:hmac_stored.len]) return CORRUPT_FILE~;
+
+		Aes aes;
+		aes.init(AES256, aes_key, {[0]=1}, CTR);
+		char[] plain = aes.tdecrypt(cipher);
+
+		switch (aex.compress_method)
+		{
+			case COMPRESS_STORE:
+				ExtractResult result;
+				result.bytes = io::write_all(output, plain)!;
+				return result;
+
+			default:
+				unreachable("not implemented yet");
+		}
+	}
 
 	switch (self.compress_method)
 	{

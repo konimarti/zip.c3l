@@ -154,3 +154,29 @@ fn void test_zip_writer() => @pool()
 	test::eq(zip_writer_data.len, n);
 	test::eq(zip_writer_data[n-22:22], bw.bytes[n-22:22]);
 }
+
+char[*] aex_encrypted_zip = x`504b0304330001006300d95d555c00000000260000000a00000009000b00
+68656c6c6f2e747874019907000200414503000064566142d317c189266a
+1d2c30e6da4e1da17c6b47dab1b39a04dbc52442e9e1a57147386575504b
+01023f00330001006300d95d555c00000000260000000a00000009002f00
+000000000000200000000000000068656c6c6f2e7478740a002000000000
+000100180069cf9e611fa3dc010000000000000000000000000000000001
+99070002004145030000504b050600000000010001006600000058000000
+0000`;
+
+fn void test_zip_extract_encrypted_aex_file() => @pool()
+{
+	ByteReader reader;
+	reader.init(aex_encrypted_zip[..]);
+
+	ZipReader z = zip::topen(&reader)!!;
+	assert(z.len() == 1);
+
+	ByteWriter bw;
+	bw.tinit();
+
+	String want = "HELLOWORLD";
+	ExtractResult result = z[0].extract_to(&bw, &reader, password: "password")!!;
+	assert(result.bytes == want.len);
+	assert(bw.str_view() == want);
+}
