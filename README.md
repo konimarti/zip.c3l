@@ -11,6 +11,7 @@ external dependencies or heavy native bindings.
 ## Features
 
 - Read and extract files from ZIP archives.
+- Extract AE-X encrypted ZIP entries.
 - Create new ZIP archives and add files.
 - Support ZIP and ZIP64 formats.
 - C3 implementation without any external dependencies.
